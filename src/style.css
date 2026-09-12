@@ -1,0 +1,13 @@
+body {
+  margin: 0;
+  background: black;
+}
+
+#debug {
+  color: white;
+  position: absolute;
+  top: 10px;
+  width: 100%;
+  z-index: 100;
+  display: block;
+}
