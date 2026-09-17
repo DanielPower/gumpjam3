@@ -1,0 +1,21 @@
+// Game: Generic
+// Format: Standard
+// Generator: TrenchBroom 2026.2 (Build v2026.2 Release macOS)
+// entity 0
+{
+"classname" "worldspawn"
+// brush 0
+{
+( -64 64 16 ) ( -64 -64 16 ) ( -64 -64 -16 ) __TB_empty 0 0 0 1 1
+( -64 -64 16 ) ( 64 -64 16 ) ( 64 -64 -16 ) __TB_empty 0 0 0 1 1
+( 64 -64 -16 ) ( 64 64 -16 ) ( -64 64 -16 ) __TB_empty 0 0 0 1 1
+( -64 64 16 ) ( 64 64 16 ) ( 64 -64 16 ) __TB_empty 0 0 0 1 1
+( 64 64 -16 ) ( 64 64 16 ) ( -64 64 16 ) __TB_empty 0 0 0 1 1
+( 64 -64 16 ) ( 64 64 16 ) ( 64 64 -16 ) __TB_empty 0 0 0 1 1
+}
+}
+// entity 1
+{
+"classname" "info_player_start"
+"origin" "48 -48 40"
+}

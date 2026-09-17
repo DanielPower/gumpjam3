@@ -1,39 +1,57 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/Addons.js";
-import { type Box3DModule } from 'box3d.js';
-import { createWorldRenderer } from "./box3d-three";
+import { type Box3DModule } from "box3d.js";
+import { createPhysicsDebugRenderer } from "./box3d-three";
 import { createHuman } from "./ragdoll";
+
+import {
+  createMapCollisionObjects,
+  createMapObject3D,
+  getEntityWorldOrigin,
+  parseTrenchBroomMap,
+} from "./trenchbroom-map";
 
 const FIELD_OF_VIEW = 75;
 const CLIP_NEAR = 0.1;
 const CLIP_FAR = 1000;
 
-export const Game = ({ b3, container }: { b3: Box3DModule, container: HTMLElement }) => {
+export const Game = async ({
+  b3,
+  container,
+}: {
+  b3: Box3DModule;
+  container: HTMLElement;
+}) => {
   let running = false;
+
+  const levelUrl = new URL("./assets/level1.map", import.meta.url);
+  const levelResponse = await fetch(levelUrl);
+  if (!levelResponse.ok) {
+    throw new Error(
+      `Failed to load map '${levelUrl}': ${levelResponse.status} ${levelResponse.statusText}`,
+    );
+  }
+  const level1Source = await levelResponse.text();
 
   const world = b3.b3CreateWorld({
     ...b3.b3DefaultWorldDef(),
     gravity: [0, -9.8, 0],
   });
 
-  const ground = b3.b3CreateBody(world, {
-    ...b3.b3DefaultBodyDef(),
-    position: [0, -0.5, 0]
-  });
-  b3.b3CreateBoxShape(ground, b3.b3DefaultShapeDef(), 20, 0.5, 20);
+  const map = parseTrenchBroomMap(level1Source);
+  createMapCollisionObjects(b3, world, map);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a1a1a);
-  const camera = new THREE.PerspectiveCamera(FIELD_OF_VIEW, window.innerWidth / window.innerHeight, CLIP_NEAR, CLIP_FAR);
+  const camera = new THREE.PerspectiveCamera(
+    FIELD_OF_VIEW,
+    window.innerWidth / window.innerHeight,
+    CLIP_NEAR,
+    CLIP_FAR,
+  );
   camera.position.set(0, 3, 9);
   camera.lookAt(0, 3, 0);
 
-  document.addEventListener('keypress', (event) => {
-    console.log(event.code);
-    if (event.code === 'Space') {
-      running = !running;
-    }
-  });
 
   const renderer = new THREE.WebGLRenderer();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -43,33 +61,57 @@ export const Game = ({ b3, container }: { b3: Box3DModule, container: HTMLElemen
 
   new OrbitControls(camera, renderer.domElement);
 
-  const debugElement = document.createElement('div');
+  const debugElement = document.createElement("div");
   debugElement.id = "debug";
   container.appendChild(debugElement);
 
-  const sun = new THREE.DirectionalLight('#fff2dc', 2.5);
+  const sun = new THREE.DirectionalLight("#fff2dc", 2.5);
   sun.position.set(6, 11, 4);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.radius = 2;
   const sc = sun.shadow.camera;
-  sc.near = 1; sc.far = 34;
-  sc.left = -12; sc.right = 12; sc.top = 12; sc.bottom = -12;
+  sc.near = 1;
+  sc.far = 34;
+  sc.left = -12;
+  sc.right = 12;
+  sc.top = 12;
+  sc.bottom = -12;
   scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0xbddcff, 0x302820, 0.8));
+  scene.add(createMapObject3D(map));
 
-  const worldRenderer = createWorldRenderer(b3, world);
-  scene.add(worldRenderer.object3d);
+  const physicsDebug = createPhysicsDebugRenderer(b3, world);
+  physicsDebug.object3d.visible = false;
+  scene.add(physicsDebug.object3d);
 
-  const human = createHuman(
+  const playerStart = map.entities.find(
+    (entity) => entity.properties.classname === "info_player_start",
+  );
+  const spawn =
+    playerStart === undefined ? null : getEntityWorldOrigin(playerStart);
+  createHuman(
     b3,
     world,
-    [0, 0, 0],
+    spawn === null ? [0, 2, 0] : [spawn.x, spawn.y, spawn.z],
     1,
     0.05,
   );
-  worldRenderer.update();
+  document.addEventListener("keydown", (event) => {
+    if (event.repeat) return;
+    if (event.code === "Space") running = !running;
+    if (event.code === "KeyP") {
+      physicsDebug.object3d.visible = !physicsDebug.object3d.visible;
+      if (physicsDebug.object3d.visible) physicsDebug.update();
+    }
+  });
 
-  const debugInfo = ({ dt }: { dt: number }) => `FPS: ${Math.round(1000 / dt)}`;
+  const debugInfo = ({ dt }: { dt: number }) =>
+    [
+      `FPS: ${Math.round(1000 / dt)}`,
+      `Simulation: ${running ? "running" : "paused"} (Space)`,
+      `Physics debug: ${physicsDebug.object3d.visible ? "on" : "off"} (P)`,
+    ].join(" | ");
 
   let lastTime = 0;
   const animate = (time: number) => {
@@ -78,10 +120,10 @@ export const Game = ({ b3, container }: { b3: Box3DModule, container: HTMLElemen
 
     if (running) {
       b3.b3World_Step(world, 1 / 60, 4);
-      worldRenderer.update();
+      if (physicsDebug.object3d.visible) physicsDebug.update();
     }
     renderer.render(scene, camera);
     debugElement.innerText = debugInfo({ dt });
-  }
+  };
   renderer.setAnimationLoop(animate);
-}
+};
