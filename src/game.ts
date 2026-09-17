@@ -52,7 +52,6 @@ export const Game = async ({
   camera.position.set(0, 3, 9);
   camera.lookAt(0, 3, 0);
 
-
   const renderer = new THREE.WebGLRenderer();
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
@@ -82,21 +81,19 @@ export const Game = async ({
   scene.add(createMapObject3D(map));
 
   const physicsDebug = createPhysicsDebugRenderer(b3, world);
-  physicsDebug.object3d.visible = false;
   scene.add(physicsDebug.object3d);
 
-  const playerStart = map.entities.find(
-    (entity) => entity.properties.classname === "info_player_start",
-  );
-  const spawn =
-    playerStart === undefined ? null : getEntityWorldOrigin(playerStart);
-  createHuman(
-    b3,
-    world,
-    spawn === null ? [0, 2, 0] : [spawn.x, spawn.y, spawn.z],
-    1,
-    0.05,
-  );
+  map.entities.forEach((entity) => {
+    if (entity.properties.classname === "info_player_start") {
+      const position = getEntityWorldOrigin(entity);
+      if (position) {
+        createHuman(b3, world, [position.x, position.y, position.z], 1, 0.05);
+      } else {
+        throw new Error("Player Start has no position");
+      }
+    }
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.repeat) return;
     if (event.code === "Space") running = !running;
@@ -105,6 +102,9 @@ export const Game = async ({
       if (physicsDebug.object3d.visible) physicsDebug.update();
     }
   });
+
+  physicsDebug.object3d.visible = true;
+  physicsDebug.update();
 
   const debugInfo = ({ dt }: { dt: number }) =>
     [
