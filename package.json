@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "itch:push": "sh scripts/itch-push.sh"
   },
   "devDependencies": {
     "@types/three": "^0.185.4",
