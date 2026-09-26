@@ -13,9 +13,14 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Black from the first paint, so loading never flashes white. */
+html,
+body {
+  background: black;
+}
+
 body {
   margin: 0;
-  background: black;
   font-size: 1rem;
 }
 

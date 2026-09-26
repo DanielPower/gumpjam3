@@ -58,10 +58,7 @@ const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
 /** How long a body part glows after taking a hit. */
 const HIT_FLASH_SECONDS = 0.4;
-/** The level to play: ?level=<id> in the URL, or the first one. */
 const LEVEL_IDS = Object.keys(levelSources);
-const requestedLevel = new URLSearchParams(window.location.search).get("level");
-const LEVEL_ID = requestedLevel && requestedLevel in levelSources ? requestedLevel : LEVEL_IDS[0];
 
 /** Screens this narrow get the portrait layout. Keep in step with style.css. */
 const NARROW_SCREEN = "(max-aspect-ratio: 4/5)";
@@ -103,14 +100,36 @@ function baitMesh(material: THREE.Material = baitMaterial) {
   return group;
 }
 
-export const Game = async ({
+/** The level named by ?level=<id> in the URL, or the first one. */
+export function levelFromUrl() {
+  const requested = new URLSearchParams(window.location.search).get("level");
+  return requested && requested in levelSources ? requested : LEVEL_IDS[0];
+}
+
+export type GameHandle = { dispose(): void };
+
+/**
+ * Play a level inside `container`. `onSelectLevel` is called when the player
+ * picks another level; the caller disposes this game and starts that one.
+ */
+export const Game = ({
   b3,
   container,
+  levelId,
+  onSelectLevel,
 }: {
   b3: Box3DModule;
   container: HTMLElement;
-}) => {
-  const level = loadLevel(levelSources[LEVEL_ID]);
+  levelId: string;
+  onSelectLevel: (levelId: string) => void;
+}): GameHandle => {
+  const level = loadLevel(levelSources[levelId]);
+  // Everything this game adds to the page, and every listener it adds outside
+  // it, goes when it's disposed.
+  const root = document.createElement("div");
+  container.appendChild(root);
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
   const { map, inventory } = level;
   const worldspawn = map.entities.find((e) => e.properties.classname === "worldspawn")?.properties ?? {};
 
@@ -131,7 +150,7 @@ export const Game = async ({
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  container.appendChild(renderer.domElement);
+  root.appendChild(renderer.domElement);
 
   const spawnEntity = map.entities.find((e) => e.properties.classname === "info_player_start");
   const focus = (spawnEntity && getEntityWorldOrigin(spawnEntity)) ?? new THREE.Vector3();
@@ -148,11 +167,11 @@ export const Game = async ({
 
   const debugElement = document.createElement("div");
   debugElement.id = "debug";
-  container.appendChild(debugElement);
+  root.appendChild(debugElement);
 
   const hudElement = document.createElement("div");
   hudElement.id = "hud";
-  container.appendChild(hudElement);
+  root.appendChild(hudElement);
 
   const levelObjects = createLevelObjects(map);
   const mapObject = levelObjects.statics;
@@ -244,7 +263,7 @@ export const Game = async ({
   leftColumn.id = "left-column";
   const rightColumn = document.createElement("div");
   rightColumn.id = "right-column";
-  container.append(leftColumn, rightColumn);
+  root.append(leftColumn, rightColumn);
   const damagePanel = new DamagePanel();
   const levelPicker =
     LEVEL_IDS.length > 1
@@ -253,10 +272,11 @@ export const Game = async ({
             const message = loadLevel(levelSources[id]).map.entities[0]?.properties.message;
             return { id, name: message ?? id };
           }),
-          LEVEL_ID,
+          levelId,
+          onSelectLevel,
         )
       : null;
-  const leaderboard = leaderboardAvailable ? new LeaderboardPanel(LEVEL_ID) : null;
+  const leaderboard = leaderboardAvailable ? new LeaderboardPanel(levelId) : null;
   // Narrow (portrait) screens stack every panel down one side, leaving the
   // rest of the screen to the game; wider ones split them across both sides.
   const narrowScreen = window.matchMedia(NARROW_SCREEN);
@@ -271,13 +291,13 @@ export const Game = async ({
     }
   };
   arrangePanels();
-  narrowScreen.addEventListener("change", arrangePanels);
+  narrowScreen.addEventListener("change", arrangePanels, { signal });
   // The placements the current run started from, for submitting its score.
   let runPlacements: Placement[] = [];
 
   const runTitle = (r: Run) => (r.finished ? "Final score" : "Damage");
   const runTimer = new RunTimer();
-  container.appendChild(runTimer.element);
+  root.appendChild(runTimer.element);
 
   const stepRun = (r: Run) => {
     const hits = r.step();
@@ -711,7 +731,7 @@ export const Game = async ({
   // by whatever was used last (starting from the device's main pointer), so
   // touchscreen laptops follow along.
   let pointerType = window.matchMedia("(pointer: coarse)").matches ? "touch" : "mouse";
-  window.addEventListener("pointerdown", (event) => (pointerType = event.pointerType), { capture: true });
+  window.addEventListener("pointerdown", (event) => (pointerType = event.pointerType), { capture: true, signal });
   const pickPixels = () => (pointerType === "touch" ? 24 : 12);
 
   const setPointer = (event: MouseEvent) => {
@@ -814,7 +834,7 @@ export const Game = async ({
 
   const aimLabel = document.createElement("div");
   aimLabel.id = "aim-label";
-  container.appendChild(aimLabel);
+  root.appendChild(aimLabel);
   let aimLabelTimeout = 0;
 
   const showAimLabel = (vector: THREE.Vector3, linger = false) => {
@@ -891,7 +911,7 @@ export const Game = async ({
   // Capture phase on the container, so this runs before the cameras' own
   // pointer handlers on the canvas. A press used for editing stops here, so it
   // doesn't also rotate the edit camera.
-  container.addEventListener(
+  root.addEventListener(
     "pointerdown",
     (event) => {
       // Extra fingers are for the camera (pinch and pan), not editing.
@@ -929,7 +949,7 @@ export const Game = async ({
       b3.b3Body_GetLocalPoint(localPoint, hit.body, hit.point.toArray());
       startDrag({ kind: "aim", index: null, target, localPoint, aim: new Aim(hit.point), mode: "create" });
     },
-    { capture: true },
+    { capture: true, signal },
   );
 
   renderer.domElement.addEventListener("pointermove", (event) => {
@@ -1040,10 +1060,10 @@ export const Game = async ({
       ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id)
       : -1;
     select(index >= 0 ? index : null);
-  });
+  }, { signal });
 
   // Scrolling over the selected arrow changes its strength instead of zooming.
-  container.addEventListener(
+  root.addEventListener(
     "wheel",
     (event) => {
       if (event.target !== renderer.domElement || running || drag || selected === null) return;
@@ -1053,7 +1073,7 @@ export const Game = async ({
       event.stopPropagation();
       adjustStrength(event.deltaY < 0 ? STRENGTH_STEP : 1 / STRENGTH_STEP);
     },
-    { capture: true, passive: false },
+    { capture: true, passive: false, signal },
   );
 
   // Keys typed into a text field (e.g. the leaderboard name) aren't game controls.
@@ -1067,7 +1087,7 @@ export const Game = async ({
       updateDrag();
     }
   };
-  document.addEventListener("keyup", onModifierChange);
+  document.addEventListener("keyup", onModifierChange, { signal });
 
   document.addEventListener("keydown", (event) => {
     if (isTyping(event)) {
@@ -1109,7 +1129,7 @@ export const Game = async ({
       default:
         if (event.code in TOOL_KEYS) selectTool(TOOL_KEYS[event.code]);
     }
-  });
+  }, { signal });
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -1117,7 +1137,7 @@ export const Game = async ({
     iso.resize();
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+  }, { signal });
 
   rebuild();
 
@@ -1150,7 +1170,7 @@ export const Game = async ({
 
   const hintElement = document.createElement("div");
   hintElement.id = "hint";
-  container.appendChild(hintElement);
+  root.appendChild(hintElement);
 
   const debugInfo = ({ dt }: { dt: number }) =>
     [
@@ -1201,5 +1221,21 @@ export const Game = async ({
     const hintText = hint();
     if (hintElement.textContent !== hintText) hintElement.textContent = hintText;
   };
+  // Draw straight away, so switching levels doesn't show a blank frame first.
+  renderer.render(scene, activeCamera);
   renderer.setAnimationLoop(animate);
+
+  return {
+    dispose() {
+      lifetime.abort();
+      renderer.setAnimationLoop(null);
+      window.clearTimeout(aimLabelTimeout);
+      rig.controls.dispose();
+      simulation.destroy();
+      renderer.dispose();
+      // Free the GPU memory now, rather than whenever the context is collected.
+      renderer.forceContextLoss();
+      root.remove();
+    },
+  };
 };

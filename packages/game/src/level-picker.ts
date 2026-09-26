@@ -2,7 +2,7 @@
 export class LevelPicker {
   readonly element = document.createElement("div");
 
-  constructor(levels: { id: string; name: string }[], currentId: string) {
+  constructor(levels: { id: string; name: string }[], currentId: string, onSelect: (id: string) => void) {
     this.element.id = "level-picker";
     const index = levels.findIndex((level) => level.id === currentId);
 
@@ -18,12 +18,7 @@ export class LevelPicker {
       const target = levels[index + delta];
       button.disabled = !target;
       button.title = target ? target.name : "";
-      button.addEventListener("click", () => {
-        // A fresh page per level keeps setup simple; placements are per level anyway.
-        const url = new URL(window.location.href);
-        url.searchParams.set("level", target.id);
-        window.location.href = url.toString();
-      });
+      button.addEventListener("click", () => onSelect(target.id));
       return button;
     };
     const name = document.createElement("div");
