@@ -19,6 +19,8 @@ const LENGTH_EPSILON = 1e-6;
 
 export class PlacementError extends Error {}
 
+const barrelCount = (level: Level) => level.map.entities.filter((e) => e.properties.classname === "prop_barrel").length;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -38,7 +40,8 @@ function bodyRef(value: unknown, what: string): BodyRef {
   if (!isRecord(value)) throw new PlacementError(`${what} must be an object`);
   if (value.kind === "ragdoll") return { kind: "ragdoll", bone: integer(value.bone, `${what}.bone`) };
   if (value.kind === "prop") return { kind: "prop", id: integer(value.id, `${what}.id`) };
-  throw new PlacementError(`${what}.kind must be "ragdoll" or "prop"`);
+  if (value.kind === "barrel") return { kind: "barrel", index: integer(value.index, `${what}.index`) };
+  throw new PlacementError(`${what}.kind must be "ragdoll", "prop" or "barrel"`);
 }
 
 /**
@@ -63,7 +66,15 @@ export function parsePlacements(input: unknown, maxCount: number): Placement[] {
     if (item.kind === "box") {
       return { kind: "box", id: integer(item.id, `${what}.id`), position: vec3(item.position, `${what}.position`) };
     }
-    throw new PlacementError(`${what}.kind must be "force" or "box"`);
+    if (item.kind === "mine") {
+      return {
+        kind: "mine",
+        id: integer(item.id, `${what}.id`),
+        position: vec3(item.position, `${what}.position`),
+        normal: vec3(item.normal, `${what}.normal`),
+      };
+    }
+    throw new PlacementError(`${what}.kind must be "force", "box" or "mine"`);
   });
 }
 
@@ -81,16 +92,18 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
   }
 
   const boxIds = new Set<number>();
+  const mineIds = new Set<number>();
   const minY = level.bounds.min.y;
   const maxY = level.bounds.max.y + MAX_HEIGHT_ABOVE_LEVEL;
   for (const p of placements) {
-    if (p.kind !== "box") continue;
-    if (p.id <= 0 || boxIds.has(p.id)) throw new PlacementError(`box id ${p.id} must be positive and unique`);
-    boxIds.add(p.id);
+    if (p.kind === "force") continue;
+    const ids = p.kind === "box" ? boxIds : mineIds;
+    if (p.id <= 0 || ids.has(p.id)) throw new PlacementError(`${p.kind} id ${p.id} must be positive and unique`);
+    ids.add(p.id);
     const [x, y, z] = p.position;
     const { min, max } = level.bounds;
     if (x < min.x || x > max.x || z < min.z || z > max.z || y < minY || y > maxY) {
-      throw new PlacementError(`box ${p.id} is outside the level`);
+      throw new PlacementError(`${p.kind} ${p.id} is outside the level`);
     }
   }
 
@@ -103,6 +116,9 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     if (target.kind === "prop" && !boxIds.has(target.id)) {
       throw new PlacementError(`a force targets missing box ${target.id}`);
     }
+    if (target.kind === "barrel" && !(target.index >= 0 && target.index < barrelCount(level))) {
+      throw new PlacementError(`there is no barrel ${target.index}`);
+    }
     if (new THREE.Vector3(...p.localPoint).length() > MAX_ATTACH_DISTANCE) {
       throw new PlacementError("a force is attached too far from its body");
     }
@@ -112,12 +128,16 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
   }
 
-  if (boxIds.size === 0) return;
+  if (boxIds.size === 0 && mineIds.size === 0) return;
   const simulation = createSimulation(b3, level.map, placements);
   try {
     for (const p of placements) {
       if (p.kind === "box" && simulation.boxOverlaps(p.position, p.id)) {
         throw new PlacementError(`box ${p.id} overlaps something`);
+      }
+      if (p.kind === "mine") {
+        const problem = simulation.mineProblem(p.position, p.normal, p.id);
+        if (problem) throw new PlacementError(problem);
       }
     }
   } finally {

@@ -8,6 +8,7 @@ import {
   createSimulation,
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
+  MINE_SURFACE_OFFSET,
   VELOCITY_PER_METER,
   type BodyRef,
   type ForcePlacement,
@@ -30,6 +31,7 @@ import { Aim, describeAim, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { LevelPicker } from "./level-picker";
 import { createLevelObjects } from "./map-object";
+import { ExplosivesView } from "./explosives-view";
 import { createTrajectoryPreview } from "./preview";
 import { leaderboardAvailable } from "./api";
 import { LeaderboardPanel } from "./leaderboard-panel";
@@ -54,8 +56,8 @@ const LEVEL_IDS = Object.keys(levelSources);
 const requestedLevel = new URLSearchParams(window.location.search).get("level");
 const LEVEL_ID = requestedLevel && requestedLevel in levelSources ? requestedLevel : LEVEL_IDS[0];
 
-const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
-const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box" };
+const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine" };
+const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine" };
 
 function disposeObject(object: THREE.Object3D) {
   object.removeFromParent();
@@ -132,8 +134,13 @@ export const Game = async ({
     .getBoundingSphere(new THREE.Sphere());
   levelBounds.radius += 3;
   const sun = new THREE.DirectionalLight("#fff2dc", 2.5);
+  // A level can aim the sun with a worldspawn "sun" key: the direction
+  // towards it in map axes, e.g. "32 -64 384" (mostly overhead).
+  const sunDirection = new THREE.Vector3(-6, 11, 4);
+  const [sunX, sunY, sunZ] = (worldspawn.sun ?? "").trim().split(/\s+/).map(Number);
+  if ([sunX, sunY, sunZ].every(Number.isFinite)) sunDirection.set(sunX, sunZ, -sunY);
   sun.position
-    .set(-6, 11, 4)
+    .copy(sunDirection)
     .normalize()
     .multiplyScalar(levelBounds.radius * 2)
     .add(levelBounds.center);
@@ -166,6 +173,7 @@ export const Game = async ({
   let simulation: Simulation;
   let physicsDebug: PhysicsDebugRenderer | null = null;
   const propMeshes = new Map<number, THREE.Mesh>();
+  const explosives = new ExplosivesView(scene, b3);
 
   const boxGeometry = new THREE.BoxGeometry(
     BOX_HALF_EXTENTS[0] * 2,
@@ -225,7 +233,9 @@ export const Game = async ({
   container.appendChild(runTimer.element);
 
   const stepRun = (r: Run) => {
-    for (const { bone, damage: amount } of r.step()) {
+    const hits = r.step();
+    explosives.explode(simulation.explosions());
+    for (const { bone, damage: amount } of hits) {
       const flash = flashes[bone];
       const strength = hitFlashStrength(amount);
       // Don't let a glancing blow cut short the glow from a bigger one.
@@ -253,12 +263,16 @@ export const Game = async ({
   const remaining = (kind: PlacementKind) =>
     inventory[kind] - placements.filter((p) => p.kind === kind).length;
 
+  const nextMineId = () =>
+    Math.max(0, ...placements.map((p) => (p.kind === "mine" ? p.id : 0))) + 1;
+
   const nextPropId = () =>
     Math.max(0, ...placements.map((p) => (p.kind === "box" ? p.id : 0))) + 1;
 
   const syncVisuals = () => {
     simulation.movers.forEach((body, i) => syncObjectToBody(b3, body, levelObjects.movers[i]));
     for (const [id, mesh] of propMeshes) syncObjectToBody(b3, simulation.props.get(id)!, mesh);
+    explosives.sync(simulation);
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ragdollMeshes[bone]));
     if (physicsDebug?.object3d.visible) physicsDebug.update();
   };
@@ -313,6 +327,7 @@ export const Game = async ({
       });
     }
 
+    explosives.rebuild(simulation, placements);
     for (const mesh of propMeshes.values()) mesh.removeFromParent();
     propMeshes.clear();
     for (const id of simulation.props.keys()) {
@@ -498,6 +513,8 @@ export const Game = async ({
       const box = selected !== null ? placements[selected] : null;
       mesh.material = box?.kind === "box" && box.id === id ? selectedBoxMaterial : boxMaterial;
     }
+    const selectedPlacement = selected !== null ? placements[selected] : null;
+    explosives.highlight(selectedPlacement?.kind === "mine" ? selectedPlacement.id : null);
 
     updateGuides();
     previewDirty = true;
@@ -527,8 +544,10 @@ export const Game = async ({
   }
 
   function updateHud() {
-    const tools = (Object.keys(TOOL_LABELS) as PlacementKind[]).map((kind, i) =>
-      button(`${i + 1}. ${TOOL_LABELS[kind]} ×${remaining(kind)}`, () => selectTool(kind), {
+    // Only the tools this level offers.
+    const offered = (Object.keys(TOOL_LABELS) as PlacementKind[]).filter((kind) => inventory[kind] > 0);
+    const tools = offered.map((kind) =>
+      button(`${Object.keys(TOOL_LABELS).indexOf(kind) + 1}. ${TOOL_LABELS[kind]} ×${remaining(kind)}`, () => selectTool(kind), {
         active: tool === kind,
         disabled: running || remaining(kind) <= 0,
       }),
@@ -561,8 +580,10 @@ export const Game = async ({
       return "Drag the head to re-aim · drag the base to move it · scroll over the arrow or [ ] for strength · Delete to remove";
     }
     if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
+    if (current?.kind === "mine") return "Delete to remove this mine · Esc to deselect";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return "Click a surface to place a box";
+    if (tool === "mine") return "Click a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives";
     return "1: add a force · 2: add a box · click an arrow or box to edit it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
   };
 
@@ -618,6 +639,15 @@ export const Game = async ({
     const [hx, hy, hz] = BOX_HALF_EXTENTS;
     const n = hit.normal;
     return hit.point.clone().add(new THREE.Vector3(n.x * hx, n.y * hy, n.z * hz));
+  };
+
+  /** A mine sitting on the surface under the pointer. */
+  const minePlacementFor = (hit: NonNullable<ReturnType<typeof pick>>) => {
+    const normal = hit.normal.clone().normalize();
+    return {
+      position: hit.point.clone().addScaledVector(normal, MINE_SURFACE_OFFSET).toArray(),
+      normal: normal.toArray(),
+    };
   };
 
   const boxBlocked = (position: THREE.Vector3) => simulation.boxOverlaps(position.toArray());
@@ -782,6 +812,12 @@ export const Game = async ({
     }
     renderer.domElement.style.cursor = cursor;
 
+    if (tool === "mine") {
+      const hit = pick();
+      const mine = hit && minePlacementFor(hit);
+      explosives.showPreview(mine, mine ? simulation.mineProblem(mine.position, mine.normal) !== null : false);
+    }
+
     if (tool === "box") {
       const hit = pick();
       boxPreview.visible = hit !== null;
@@ -812,6 +848,14 @@ export const Game = async ({
     setPointer(event);
     const hit = pick();
 
+    if (tool === "mine") {
+      const mine = hit && minePlacementFor(hit);
+      if (!mine || simulation.mineProblem(mine.position, mine.normal)) return;
+      explosives.showPreview(null);
+      addPlacement({ kind: "mine", id: nextMineId(), ...mine });
+      return;
+    }
+
     if (tool === "box") {
       if (!hit) return;
       const position = boxPositionFor(hit);
@@ -821,7 +865,12 @@ export const Game = async ({
       return;
     }
 
-    // Clicking a box selects it; clicking anything else deselects.
+    // Clicking a mine or a box selects it; clicking anything else deselects.
+    const mineId = explosives.hitMine(raycaster);
+    if (mineId !== null) {
+      select(placements.findIndex((p) => p.kind === "mine" && p.id === mineId));
+      return;
+    }
     const ref = hit && simulation.refForBody(hit.body);
     const index = ref?.kind === "prop" ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id) : -1;
     select(index >= 0 ? index : null);
@@ -969,6 +1018,7 @@ export const Game = async ({
     rig.update(Math.min(dt, 100) / 1000);
     iso.update(Math.min(dt, 100) / 1000);
     updateFlashes(Math.min(dt, 100) / 1000);
+    explosives.update(Math.min(dt, 100) / 1000);
 
     renderer.render(scene, activeCamera);
     debugElement.innerText = debugInfo({ dt });

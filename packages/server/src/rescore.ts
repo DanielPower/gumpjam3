@@ -16,7 +16,7 @@ export function rescoreOutdated(b3: Box3DModule, levels: Map<string, ServerLevel
   for (const [id, level] of levels) {
     for (const entry of scores.outdated(id, level.rules)) {
       try {
-        const placements = parsePlacements(entry.placements, level.inventory.force + level.inventory.box);
+        const placements = parsePlacements(entry.placements, level.maxPlacements);
         validatePlacements(b3, level, placements);
         const { score, damage } = simulateRun(b3, level.map, placements, level.runLimits);
         scores.rescore(entry.id, { score, damage, rules: level.rules });

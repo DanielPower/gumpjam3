@@ -28,3 +28,6 @@ packages/shared/levels/autosave
 
 # Server database
 packages/server/data
+
+# Python bytecode from the level generator scripts
+__pycache__

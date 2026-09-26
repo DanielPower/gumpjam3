@@ -73,7 +73,7 @@ export function createApp({ b3, levels, scores, corsOrigin = "*" }: AppOptions) 
     const name = cleanName(rawName);
     if (!name) return c.json<ApiError>({ error: `name must be 1-${MAX_NAME_LENGTH} characters` }, 400);
 
-    const maxPlacements = level.inventory.force + level.inventory.box;
+    const { maxPlacements } = level;
     let placements;
     try {
       placements = parsePlacements(rawPlacements, maxPlacements);

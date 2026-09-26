@@ -35,6 +35,11 @@ const TEXTURE_COLORS: Record<string, number> = {
   water: 0x3f8fc9,
   bark: 0x6b4a2f,
   leaves: 0x4f8f3a,
+  sandstone: 0xd9b98a,
+  sandstone_dark: 0xa9875c,
+  gravel: 0x9d948a,
+  rust: 0x8a4b2a,
+  orange: 0xe07b24,
 };
 
 const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });

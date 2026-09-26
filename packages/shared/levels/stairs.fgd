@@ -8,7 +8,11 @@
 	inventory_box(integer) : "Boxes the player can place" : 1
 	run_quiet_seconds(string) : "A run ends after this many seconds without damage" : "3"
 	sky(string) : "Sky colour, e.g. #9ecbf2"
+	sun(string) : "Direction towards the sun, in map axes, e.g. 64 -24 384 (mostly overhead)"
+	inventory_mine(integer) : "Mines the player can place" : 0
 ]
+
+@PointClass size(-10 -10 0, 10 10 29) color(220 40 30) = prop_barrel : "Explosive barrel; its origin is the centre of its base. Goes off when hit hard or caught in a blast" []
 
 @PointClass size(-16 -16 0, 16 16 56) color(0 200 0) = info_player_start : "Where the ragdoll stands; its feet are at the origin" [
 	angle(integer) : "Facing (compass angle)" : 0
