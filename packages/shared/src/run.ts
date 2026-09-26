@@ -8,7 +8,7 @@ import type { TrenchBroomMap } from "./trenchbroom-map";
  * run limits). The server re-scores stored leaderboard entries under the new
  * rules, so scores stay comparable. Level edits are picked up separately.
  */
-export const RULES_VERSION = 2;
+export const RULES_VERSION = 5;
 
 export type ScoredHit = RagdollHit & { damage: number };
 

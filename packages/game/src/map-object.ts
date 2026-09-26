@@ -41,6 +41,12 @@ const TEXTURE_COLORS: Record<string, number> = {
   gravel: 0x9d948a,
   rust: 0x8a4b2a,
   orange: 0xe07b24,
+  slime: 0x557a43,
+  cheese: 0xf2bd32,
+  fur: 0x7a5235,
+  fur_dark: 0x4b3528,
+  fur_king: 0x9a7650,
+  pink: 0xd78b91,
 };
 
 const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });

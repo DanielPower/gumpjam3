@@ -18,13 +18,19 @@ import {
  *       Static and springy. "restitution" (default 1.1; above 1 adds energy),
  *       "friction" (default 0.6).
  *   func_rotating
- *       Spins forever about a vertical axis through "origin" (or the centre of
- *       its brushes). "speed" in degrees per second; negative spins the other way.
+ *       Spins forever about "axis" in map coordinates (vertical by default)
+ *       through "origin" (or the centre of its brushes). "speed" is in degrees
+ *       per second; negative spins the other way.
  *   func_mover
  *       Travels along "move" (an offset in map units) at "speed" map units per
  *       second. "mode" is "loop" (jump back to the start at the end; hide the
  *       jump inside geometry) or "pingpong". "phase" (0-1) is how far along the
  *       cycle it starts.
+ *   func_rat
+ *       Waits at its authored origin until assigned player-placed bait, then
+ *       makes one charge through it when the ragdoll approaches. "speed" is
+ *       map units per second, "delay" is the arming time after Go, and
+ *       "forward" is the direction the brushwork faces in map axes.
  *
  * Moving entities are driven purely by the physics step count, so every
  * replay (including the server's) sees them in exactly the same place.
@@ -38,7 +44,8 @@ export type StaticSolid = { brushes: BrushGeometry[]; material: SurfaceMaterial 
 
 export type MoverMotion =
   | { kind: "rotate"; angularVelocity: THREE.Vector3 }
-  | { kind: "path"; offset: THREE.Vector3; speed: number; loop: boolean; phase: number };
+  | { kind: "path"; offset: THREE.Vector3; speed: number; loop: boolean; phase: number }
+  | { kind: "rat"; speed: number; delay: number; forward: THREE.Vector3 };
 
 export type MovingSolid = {
   /** Index into map.entities, for looking the entity up again. */
@@ -91,11 +98,12 @@ export function levelSolids(map: TrenchBroomMap): LevelSolids {
     } else if (classname === "func_rotating") {
       const pivot = getEntityWorldOrigin(entity) ?? brushBounds(brushes).getCenter(new THREE.Vector3());
       const radiansPerSecond = THREE.MathUtils.degToRad(number(entity, "speed", 90));
+      const axis = mapVectorToWorld(entity.properties.axis)?.normalize() ?? new THREE.Vector3(0, 1, 0);
       movers.push({
         entityIndex,
         pivot,
         brushes: relativeTo(brushes, pivot),
-        motion: { kind: "rotate", angularVelocity: new THREE.Vector3(0, radiansPerSecond, 0) },
+        motion: { kind: "rotate", angularVelocity: axis.multiplyScalar(radiansPerSecond) },
       });
     } else if (classname === "func_mover") {
       const pivot = brushBounds(brushes).getCenter(new THREE.Vector3());
@@ -109,6 +117,20 @@ export function levelSolids(map: TrenchBroomMap): LevelSolids {
           speed: mapUnitsToMeters(number(entity, "speed", 256)),
           loop: entity.properties.mode !== "pingpong",
           phase: THREE.MathUtils.euclideanModulo(number(entity, "phase", 0), 1),
+        },
+      });
+    } else if (classname === "func_rat") {
+      const pivot = getEntityWorldOrigin(entity) ?? brushBounds(brushes).getCenter(new THREE.Vector3());
+      const forward = mapVectorToWorld(entity.properties.forward)?.setY(0).normalize() ?? new THREE.Vector3(0, 0, 1);
+      movers.push({
+        entityIndex,
+        pivot,
+        brushes: relativeTo(brushes, pivot),
+        motion: {
+          kind: "rat",
+          speed: mapUnitsToMeters(number(entity, "speed", 320)),
+          delay: Math.max(0, number(entity, "delay", 0.5)),
+          forward,
         },
       });
     }

@@ -4,6 +4,7 @@ import { BODY_PARTS, scoreOf } from "@stairs/shared/damage";
 import { loadLevel } from "@stairs/shared/level";
 import { startRun, type Run } from "@stairs/shared/run";
 import {
+  BAIT_SURFACE_OFFSET,
   BOX_HALF_EXTENTS,
   createSimulation,
   MAX_ARROW_LENGTH,
@@ -56,8 +57,8 @@ const LEVEL_IDS = Object.keys(levelSources);
 const requestedLevel = new URLSearchParams(window.location.search).get("level");
 const LEVEL_ID = requestedLevel && requestedLevel in levelSources ? requestedLevel : LEVEL_IDS[0];
 
-const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine" };
-const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine" };
+const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait" };
+const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait" };
 
 function disposeObject(object: THREE.Object3D) {
   object.removeFromParent();
@@ -69,6 +70,29 @@ function disposeObject(object: THREE.Object3D) {
       );
     }
   });
+}
+
+const baitGeometry = new THREE.CylinderGeometry(0.07, 0.28, BAIT_SURFACE_OFFSET * 2, 18, 1, false, -0.65, 1.3);
+const baitMaterial = new THREE.MeshStandardMaterial({ color: 0xf2bd32, roughness: 0.82 });
+const selectedBaitMaterial = new THREE.MeshStandardMaterial({
+  color: 0xffd95a,
+  emissive: 0x806020,
+  roughness: 0.82,
+});
+const cheeseHoleGeometry = new THREE.SphereGeometry(0.035, 10, 6);
+const cheeseHoleMaterial = new THREE.MeshStandardMaterial({ color: 0xb97818, roughness: 1, side: THREE.DoubleSide });
+
+function baitMesh(material: THREE.Material = baitMaterial) {
+  const group = new THREE.Group();
+  const cheese = new THREE.Mesh(baitGeometry, material);
+  cheese.castShadow = cheese.receiveShadow = true;
+  group.add(cheese);
+  for (const [x, y, z] of [[0.08, 0.06, 0.08], [0.15, 0.035, -0.02], [0.06, 0.04, -0.1]] as const) {
+    const hole = new THREE.Mesh(cheeseHoleGeometry, cheeseHoleMaterial);
+    hole.position.set(x, y, z);
+    group.add(hole);
+  }
+  return group;
 }
 
 export const Game = async ({
@@ -173,6 +197,10 @@ export const Game = async ({
   let simulation: Simulation;
   let physicsDebug: PhysicsDebugRenderer | null = null;
   const propMeshes = new Map<number, THREE.Mesh>();
+  const baitMeshes = new Map<number, THREE.Group>();
+  const ratRouteLines = new THREE.Group();
+  ratRouteLines.name = "Rat charge routes";
+  scene.add(ratRouteLines);
   const explosives = new ExplosivesView(scene, b3);
 
   const boxGeometry = new THREE.BoxGeometry(
@@ -269,9 +297,13 @@ export const Game = async ({
   const nextPropId = () =>
     Math.max(0, ...placements.map((p) => (p.kind === "box" ? p.id : 0))) + 1;
 
+  const nextBaitId = () =>
+    Math.max(0, ...placements.map((p) => (p.kind === "bait" ? p.id : 0))) + 1;
+
   const syncVisuals = () => {
     simulation.movers.forEach((body, i) => syncObjectToBody(b3, body, levelObjects.movers[i]));
     for (const [id, mesh] of propMeshes) syncObjectToBody(b3, simulation.props.get(id)!, mesh);
+    for (const [id, mesh] of baitMeshes) mesh.visible = !simulation.baitConsumed(id);
     explosives.sync(simulation);
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ragdollMeshes[bone]));
     if (physicsDebug?.object3d.visible) physicsDebug.update();
@@ -332,11 +364,40 @@ export const Game = async ({
     propMeshes.clear();
     for (const id of simulation.props.keys()) {
       const mesh = new THREE.Mesh(boxGeometry, boxMaterial);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.castShadow = mesh.receiveShadow = true;
       propMeshes.set(id, mesh);
       scene.add(mesh);
     }
+
+    for (const mesh of baitMeshes.values()) mesh.removeFromParent();
+    baitMeshes.clear();
+    for (const placement of placements) {
+      if (placement.kind !== "bait") continue;
+      const mesh = baitMesh();
+      mesh.position.set(...placement.position);
+      mesh.userData.baitId = placement.id;
+      baitMeshes.set(placement.id, mesh);
+      scene.add(mesh);
+    }
+    for (const line of ratRouteLines.children) {
+      if (!(line instanceof THREE.Line)) continue;
+      line.geometry.dispose();
+      if (Array.isArray(line.material)) line.material.forEach((material) => material.dispose());
+      else line.material.dispose();
+    }
+    ratRouteLines.clear();
+    const routeColors = [0xffd54a, 0xff8a65];
+    simulation.ratRoutes().forEach((route, index) => {
+      const points = [route.start, route.bait, route.end].map(([x, y, z]) => new THREE.Vector3(x, y + 0.12, z));
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineDashedMaterial({ color: routeColors[index % routeColors.length], dashSize: 0.35, gapSize: 0.18 }),
+      );
+      line.computeLineDistances();
+      line.renderOrder = 1000;
+      ratRouteLines.add(line);
+    });
+    ratRouteLines.visible = !running;
 
     syncVisuals();
     refreshForces();
@@ -404,6 +465,8 @@ export const Game = async ({
     if (running) return;
     tool = kind && remaining(kind) > 0 && tool !== kind ? kind : null;
     boxPreview.visible = false;
+    baitPreview.visible = false;
+    explosives.showPreview(null);
     updateHud();
   };
 
@@ -450,6 +513,8 @@ export const Game = async ({
     run = startRun(simulation, level.runLimits);
     damagePanel.update(run.damage, runTitle(run));
     boxPreview.visible = false;
+    baitPreview.visible = false;
+    ratRouteLines.visible = false;
     refreshForces();
   };
 
@@ -510,8 +575,14 @@ export const Game = async ({
     forceArrows.visible = !running;
 
     for (const [id, mesh] of propMeshes) {
-      const box = selected !== null ? placements[selected] : null;
-      mesh.material = box?.kind === "box" && box.id === id ? selectedBoxMaterial : boxMaterial;
+      const selectedProp = selected !== null ? placements[selected] : null;
+      mesh.material = selectedProp?.kind === "box" && selectedProp.id === id ? selectedBoxMaterial : boxMaterial;
+    }
+    for (const [id, group] of baitMeshes) {
+      const selectedBait = selected !== null ? placements[selected] : null;
+      (group.children[0] as THREE.Mesh).material = selectedBait?.kind === "bait" && selectedBait.id === id
+        ? selectedBaitMaterial
+        : baitMaterial;
     }
     const selectedPlacement = selected !== null ? placements[selected] : null;
     explosives.highlight(selectedPlacement?.kind === "mine" ? selectedPlacement.id : null);
@@ -581,10 +652,12 @@ export const Game = async ({
     }
     if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
     if (current?.kind === "mine") return "Delete to remove this mine · Esc to deselect";
+    if (current?.kind === "bait") return "The rat charges on this line when the body approaches · Delete to move bait · Esc to deselect";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return "Click a surface to place a box";
     if (tool === "mine") return "Click a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives";
-    return "1: add a force · 2: add a box · click an arrow or box to edit it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
+    if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
+    return "Choose a tool to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
   };
 
   // --- Picking ----------------------------------------------------------------
@@ -652,12 +725,26 @@ export const Game = async ({
 
   const boxBlocked = (position: THREE.Vector3) => simulation.boxOverlaps(position.toArray());
 
+  const baitPositionFor = (hit: NonNullable<ReturnType<typeof pick>>) =>
+    hit.normal.y >= 0.95 ? hit.point.clone().addScaledVector(hit.normal, BAIT_SURFACE_OFFSET) : null;
+
+  const hitBait = () => {
+    const [hit] = raycaster.intersectObjects([...baitMeshes.values()], true);
+    let object: THREE.Object3D | null = hit?.object ?? null;
+    while (object && object.userData.baitId === undefined) object = object.parent;
+    return (object?.userData.baitId as number | undefined) ?? null;
+  };
+
   const boxPreview = new THREE.Mesh(
     boxGeometry,
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false }),
   );
   boxPreview.visible = false;
   scene.add(boxPreview);
+  const baitPreviewMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, depthWrite: false });
+  const baitPreview = baitMesh(baitPreviewMaterial);
+  baitPreview.visible = false;
+  scene.add(baitPreview);
 
   // --- Dragging forces ----------------------------------------------------------
 
@@ -827,6 +914,16 @@ export const Game = async ({
         (boxPreview.material as THREE.MeshBasicMaterial).color.set(blocked ? 0xff4040 : 0xffffff);
       }
     }
+
+    if (tool === "bait") {
+      const hit = pick();
+      const position = hit && baitPositionFor(hit);
+      baitPreview.visible = position !== null;
+      if (position) {
+        baitPreview.position.copy(position);
+        baitPreviewMaterial.color.set(simulation.baitProblem(position.toArray()) ? 0xff4040 : 0xffffff);
+      }
+    }
   });
 
   window.addEventListener("pointerup", (event) => {
@@ -865,6 +962,21 @@ export const Game = async ({
       return;
     }
 
+    if (tool === "bait") {
+      if (!hit) return;
+      const position = baitPositionFor(hit);
+      if (!position || simulation.baitProblem(position.toArray())) return;
+      baitPreview.visible = false;
+      addPlacement({ kind: "bait", id: nextBaitId(), position: position.toArray() });
+      return;
+    }
+
+    // Bait has no physics body, so select its rendered mesh before physics picking.
+    const baitId = hitBait();
+    if (baitId !== null) {
+      select(placements.findIndex((p) => p.kind === "bait" && p.id === baitId));
+      return;
+    }
     // Clicking a mine or a box selects it; clicking anything else deselects.
     const mineId = explosives.hitMine(raycaster);
     if (mineId !== null) {
@@ -872,7 +984,9 @@ export const Game = async ({
       return;
     }
     const ref = hit && simulation.refForBody(hit.body);
-    const index = ref?.kind === "prop" ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id) : -1;
+    const index = ref?.kind === "prop"
+      ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id)
+      : -1;
     select(index >= 0 ? index : null);
   });
 

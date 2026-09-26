@@ -3,7 +3,7 @@ import type { RunLimits } from "./run";
 import { TIME_STEP, type Inventory } from "./simulation";
 import { mapBrushGeometry, parseTrenchBroomMap, type TrenchBroomMap } from "./trenchbroom-map";
 
-const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1, mine: 0 };
+const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1, mine: 0, bait: 0 };
 const DEFAULT_QUIET_SECONDS = 3;
 /** Hard limit on a run, so a loop that keeps dealing damage can't go forever. */
 const MAX_RUN_SECONDS = 60;
@@ -21,7 +21,8 @@ export type Level = {
 
 /**
  * Parse a level. Settings come from worldspawn keys, e.g. "inventory_force" "3",
- * "inventory_box" "1", "inventory_mine" "2", "run_quiet_seconds" "3".
+ * "inventory_box" "1", "inventory_mine" "2", "inventory_bait" "2",
+ * "run_quiet_seconds" "3".
  */
 export function loadLevel(source: string): Level {
   const map = parseTrenchBroomMap(source);

@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { levelSolids } from "@stairs/shared/level-entities";
 import { loadLevel } from "@stairs/shared/level";
 import { visibleFaces } from "../game/src/brush-csg";
-for (const id of ["level1", "level2", "level3"]) {
+for (const id of ["level1", "level2", "level3", "level4"]) {
   const level = loadLevel(readFileSync(`../shared/levels/${id}.map`, "utf8"));
   const brushes = levelSolids(level.map).statics.flatMap((s) => s.brushes);
   const faces = visibleFaces(brushes);

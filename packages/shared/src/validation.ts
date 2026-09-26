@@ -63,8 +63,8 @@ export function parsePlacements(input: unknown, maxCount: number): Placement[] {
         vector: vec3(item.vector, `${what}.vector`),
       };
     }
-    if (item.kind === "box") {
-      return { kind: "box", id: integer(item.id, `${what}.id`), position: vec3(item.position, `${what}.position`) };
+    if (item.kind === "box" || item.kind === "bait") {
+      return { kind: item.kind, id: integer(item.id, `${what}.id`), position: vec3(item.position, `${what}.position`) };
     }
     if (item.kind === "mine") {
       return {
@@ -74,7 +74,7 @@ export function parsePlacements(input: unknown, maxCount: number): Placement[] {
         normal: vec3(item.normal, `${what}.normal`),
       };
     }
-    throw new PlacementError(`${what}.kind must be "force", "box" or "mine"`);
+    throw new PlacementError(`${what}.kind must be "force", "box", "mine" or "bait"`);
   });
 }
 
@@ -91,13 +91,14 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
   }
 
-  const boxIds = new Set<number>();
+  const propIds = new Set<number>();
   const mineIds = new Set<number>();
+  const baitIds = new Set<number>();
   const minY = level.bounds.min.y;
   const maxY = level.bounds.max.y + MAX_HEIGHT_ABOVE_LEVEL;
   for (const p of placements) {
     if (p.kind === "force") continue;
-    const ids = p.kind === "box" ? boxIds : mineIds;
+    const ids = p.kind === "box" ? propIds : p.kind === "mine" ? mineIds : baitIds;
     if (p.id <= 0 || ids.has(p.id)) throw new PlacementError(`${p.kind} id ${p.id} must be positive and unique`);
     ids.add(p.id);
     const [x, y, z] = p.position;
@@ -113,7 +114,7 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     if (target.kind === "ragdoll" && !(target.bone >= 0 && target.bone < BODY_PARTS.length)) {
       throw new PlacementError(`there is no ragdoll bone ${target.bone}`);
     }
-    if (target.kind === "prop" && !boxIds.has(target.id)) {
+    if (target.kind === "prop" && !propIds.has(target.id)) {
       throw new PlacementError(`a force targets missing box ${target.id}`);
     }
     if (target.kind === "barrel" && !(target.index >= 0 && target.index < barrelCount(level))) {
@@ -128,12 +129,16 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
   }
 
-  if (boxIds.size === 0 && mineIds.size === 0) return;
+  if (propIds.size === 0 && mineIds.size === 0 && baitIds.size === 0) return;
   const simulation = createSimulation(b3, level.map, placements);
   try {
     for (const p of placements) {
       if (p.kind === "box" && simulation.boxOverlaps(p.position, p.id)) {
         throw new PlacementError(`box ${p.id} overlaps something`);
+      }
+      if (p.kind === "bait") {
+        const problem = simulation.baitProblem(p.position, p.id);
+        if (problem) throw new PlacementError(problem);
       }
       if (p.kind === "mine") {
         const problem = simulation.mineProblem(p.position, p.normal, p.id);

@@ -10,6 +10,7 @@
 	sky(string) : "Sky colour, e.g. #9ecbf2"
 	sun(string) : "Direction towards the sun, in map axes, e.g. 64 -24 384 (mostly overhead)"
 	inventory_mine(integer) : "Mines the player can place" : 0
+	inventory_bait(integer) : "Cheese bait the player can place" : 0
 ]
 
 @PointClass size(-10 -10 0, 10 10 29) color(220 40 30) = prop_barrel : "Explosive barrel; its origin is the centre of its base. Goes off when hit hard or caught in a blast" []
@@ -31,9 +32,10 @@
 	friction(string) : "Friction" : "0.6"
 ]
 
-@SolidClass = func_rotating : "Spins forever about a vertical axis" [
+@SolidClass = func_rotating : "Spins forever about a configurable axis" [
 	origin(string) : "Pivot (map units); defaults to the centre of the brushes"
 	speed(string) : "Degrees per second; negative spins the other way" : "90"
+	axis(string) : "Axis in map coordinates; defaults to map Z (world vertical)" : "0 0 1"
 ]
 
 @SolidClass = func_mover : "Travels along a path, driven by the run's clock" [
@@ -44,4 +46,11 @@
 		"pingpong" : "Travel back again"
 	]
 	phase(string) : "How far along its cycle it starts, 0-1" : "0"
+]
+
+@SolidClass = func_rat : "Makes one charge through player-placed cheese bait" [
+	origin(string) : "Home position and rotation pivot in map units"
+	speed(string) : "Charge speed in map units per second" : "320"
+	delay(string) : "Seconds after Go before the proximity trigger is armed" : "0.5"
+	forward(string) : "Direction the brushwork faces in map coordinates" : "0 -32 0"
 ]

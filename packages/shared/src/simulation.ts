@@ -1,4 +1,5 @@
 import type { Box3DModule, b3BodyId, b3ShapeId, b3Vec3, b3WorldId } from "box3d.js";
+import * as THREE from "three";
 import { levelSolids, pathProgress, type SurfaceMaterial } from "./level-entities";
 import { createHuman } from "./ragdoll";
 import {
@@ -13,6 +14,10 @@ export const VELOCITY_PER_METER = 9;
 export const TIME_STEP = 1 / 60;
 const SUB_STEPS = 4;
 export const BOX_HALF_EXTENTS: b3Vec3 = [0.25, 0.25, 0.25];
+/** Cheese bait sits just above the floor it is placed on. */
+export const BAIT_SURFACE_OFFSET = 0.08;
+/** A baited rat launches once the ragdoll enters this radius around its bait. */
+export const RAT_BAIT_TRIGGER_RADIUS = 5;
 /** Force arrows are limited to this length (metres), i.e. a maximum strength. */
 export const MAX_ARROW_LENGTH = 1.5;
 export const MIN_ARROW_LENGTH = 0.05;
@@ -84,7 +89,14 @@ export type MinePlacement = {
   normal: b3Vec3;
 };
 
-export type Placement = ForcePlacement | BoxPlacement | MinePlacement;
+export type BaitPlacement = {
+  kind: "bait";
+  id: number;
+  /** Centre of the cheese, just above the sewer floor. */
+  position: b3Vec3;
+};
+
+export type Placement = ForcePlacement | BoxPlacement | MinePlacement | BaitPlacement;
 export type PlacementKind = Placement["kind"];
 export type Inventory = Record<PlacementKind, number>;
 
@@ -94,6 +106,15 @@ export type RagdollHit = { bone: number; speed: number; point: b3Vec3 };
 export type ExplosiveRef = { kind: "mine"; id: number } | { kind: "barrel"; index: number };
 
 export type Explosion = { source: ExplosiveRef; position: b3Vec3; radius: number };
+
+/** The deterministic charge assigned to a rat by one piece of bait. */
+export type RatRoute = {
+  moverIndex: number;
+  baitId: number;
+  start: b3Vec3;
+  bait: b3Vec3;
+  end: b3Vec3;
+};
 
 export type Simulation = {
   world: b3WorldId;
@@ -109,8 +130,14 @@ export type Simulation = {
   detonated(source: ExplosiveRef): boolean;
   /** Explosions during the last step. */
   explosions(): Explosion[];
+  /** Rat charges created by the current bait placements. */
+  ratRoutes(): readonly RatRoute[];
+  /** Whether a rat has reached and eaten this bait. */
+  baitConsumed(id: number): boolean;
   /** Why a mine can't go at `position` (on a surface with this normal), or null if it can. */
   mineProblem(position: b3Vec3, normal: b3Vec3, ignoreMine?: number): string | null;
+  /** Why bait cannot be placed at `position`, or null if a rat can reach it. */
+  baitProblem(position: b3Vec3, ignoreBait?: number): string | null;
   resolve(ref: BodyRef): b3BodyId;
   /** Look up the BodyRef for a dynamic body, or null for static geometry. */
   refForBody(body: b3BodyId): BodyRef | null;
@@ -150,6 +177,58 @@ export function createSimulation(
 
   // Level geometry: static solids, then kinematic movers driven by the step count.
   const solids = levelSolids(map);
+  const baits = placements.filter((placement): placement is BaitPlacement => placement.kind === "bait");
+
+  type InternalRatRoute = RatRoute & {
+    rotation: [number, number, number, number];
+    baitDistance: number;
+    travelDistance: number;
+    triggerStep: number | null;
+    consumed: boolean;
+    completed: boolean;
+  };
+  const ratRoutes: InternalRatRoute[] = [];
+  const pairs = solids.movers.flatMap((mover, moverIndex) =>
+    mover.motion.kind !== "rat" ? [] : baits.map((bait) => ({
+      moverIndex,
+      bait,
+      distance: Math.hypot(bait.position[0] - mover.pivot.x, bait.position[2] - mover.pivot.z),
+    })),
+  ).sort((a, b) => a.distance - b.distance || a.moverIndex - b.moverIndex || a.bait.id - b.bait.id);
+  const assignedRats = new Set<number>();
+  const assignedBaits = new Set<number>();
+  for (const { moverIndex, bait, distance } of pairs) {
+    if (assignedRats.has(moverIndex) || assignedBaits.has(bait.id) || distance < 1e-6) continue;
+    assignedRats.add(moverIndex);
+    assignedBaits.add(bait.id);
+    const mover = solids.movers[moverIndex];
+    const motion = mover.motion;
+    if (motion.kind !== "rat") continue;
+    const direction = new THREE.Vector3(
+      bait.position[0] - mover.pivot.x,
+      0,
+      bait.position[2] - mover.pivot.z,
+    ).normalize();
+    const travelDistance = distance + 2.5;
+    const end = mover.pivot.clone().addScaledVector(direction, travelDistance);
+    const authoredYaw = Math.atan2(motion.forward.x, motion.forward.z);
+    const routeYaw = Math.atan2(direction.x, direction.z);
+    const yaw = routeYaw - authoredYaw;
+    ratRoutes.push({
+      moverIndex,
+      baitId: bait.id,
+      start: mover.pivot.toArray(),
+      bait: bait.position,
+      end: end.toArray(),
+      baitDistance: distance,
+      travelDistance,
+      triggerStep: null,
+      consumed: false,
+      completed: false,
+      rotation: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)],
+    });
+  }
+  const routeForMover = (index: number) => ratRoutes.find((route) => route.moverIndex === index);
   const addBrushes = (body: b3BodyId, brushes: BrushGeometry[], material: SurfaceMaterial | null) => {
     const shapeDef = b3.b3DefaultShapeDef();
     if (material) {
@@ -166,7 +245,7 @@ export function createSimulation(
   const levelBody = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
   for (const solid of solids.statics) addBrushes(levelBody, solid.brushes, solid.material);
 
-  const movers = solids.movers.map((mover) => {
+  const movers = solids.movers.map((mover, index) => {
     const bodyDef = b3.b3DefaultBodyDef();
     bodyDef.type = b3.b3BodyType.b3_kinematicBody;
     const start = mover.motion.kind === "path"
@@ -174,24 +253,58 @@ export function createSimulation(
       : mover.pivot;
     bodyDef.position = start.toArray();
     if (mover.motion.kind === "rotate") bodyDef.angularVelocity = mover.motion.angularVelocity.toArray();
+    const ratRoute = routeForMover(index);
+    if (ratRoute) bodyDef.rotation = ratRoute.rotation;
     const body = b3.b3CreateBody(world, bodyDef);
     addBrushes(body, mover.brushes, null);
     return body;
   });
   let stepCount = 0;
 
-  /** Drive path movers so they reach where they should be at the end of the next step. */
+  /** Drive path movers and baited rats to the end of the next step. */
   const driveMovers = () => {
     const identity: [number, number, number, number] = [0, 0, 0, 1];
     solids.movers.forEach(({ motion, pivot }, i) => {
-      if (motion.kind !== "path") return;
-      const now = pathProgress(motion, stepCount * TIME_STEP);
-      const next = pathProgress(motion, (stepCount + 1) * TIME_STEP);
-      const at = (progress: number) => pivot.clone().addScaledVector(motion.offset, progress).toArray();
-      // A loop that wraps round jumps back to the start instead of sweeping
-      // back along the path: teleport to one step's travel before `next`.
-      if (motion.loop && next < now) b3.b3Body_SetTransform(movers[i], at(next - (next + 1 - now)), identity);
-      b3.b3Body_SetTargetTransform(movers[i], { position: at(next), quaternion: identity }, TIME_STEP, true);
+      if (motion.kind === "path") {
+        const now = pathProgress(motion, stepCount * TIME_STEP);
+        const next = pathProgress(motion, (stepCount + 1) * TIME_STEP);
+        const at = (progress: number) => pivot.clone().addScaledVector(motion.offset, progress).toArray();
+        // A loop that wraps round jumps back to the start instead of sweeping
+        // back along the path: teleport to one step's travel before `next`.
+        if (motion.loop && next < now) b3.b3Body_SetTransform(movers[i], at(next - (next + 1 - now)), identity);
+        b3.b3Body_SetTargetTransform(movers[i], { position: at(next), quaternion: identity }, TIME_STEP, true);
+        return;
+      }
+      if (motion.kind !== "rat") return;
+      const route = routeForMover(i);
+      if (!route || route.completed) return;
+      const t = (stepCount + 1) * TIME_STEP;
+      if (route.triggerStep === null) {
+        const nearBait = ragdoll.some((body) => {
+          const position = b3.b3Body_GetPosition([0, 0, 0], body);
+          return Math.hypot(
+            position[0] - route.bait[0],
+            position[1] - route.bait[1],
+            position[2] - route.bait[2],
+          ) <= RAT_BAIT_TRIGGER_RADIUS;
+        });
+        if (t < motion.delay || !nearBait) return;
+        route.triggerStep = stepCount;
+      }
+      const elapsed = (stepCount + 1 - route.triggerStep) * TIME_STEP;
+      route.consumed ||= elapsed >= route.baitDistance / motion.speed;
+      const progress = (elapsed * motion.speed) / route.travelDistance;
+      if (progress >= 1) {
+        // The rat has entered the opposite tunnel. Teleport it home instead of
+        // sweeping it backwards through the arena for a second, surprise hit.
+        b3.b3Body_SetTransform(movers[i], pivot.toArray(), route.rotation);
+        b3.b3Body_SetLinearVelocity(movers[i], [0, 0, 0]);
+        b3.b3Body_SetAngularVelocity(movers[i], [0, 0, 0]);
+        route.completed = true;
+        return;
+      }
+      const position = pivot.clone().lerp(new THREE.Vector3(...route.end), THREE.MathUtils.clamp(progress, 0, 1));
+      b3.b3Body_SetTargetTransform(movers[i], { position: position.toArray(), quaternion: route.rotation }, TIME_STEP, true);
     });
   };
 
@@ -445,6 +558,29 @@ export function createSimulation(
     return null;
   };
 
+  /** Bait must sit on the rats' floor, where their horizontal charge can reach it. */
+  const baitProblem = (position: b3Vec3, ignoreBait?: number): string | null => {
+    const ratFloors = solids.movers.flatMap((mover) => mover.motion.kind === "rat" ? [mover.pivot.y] : []);
+    if (ratFloors.length === 0) return "this level has no rats to bait";
+    if (ratFloors.every((floor) => Math.abs(position[1] - (floor + BAIT_SURFACE_OFFSET)) > 0.12)) {
+      return "bait must be placed on the sewer floor";
+    }
+    let onLevel = false;
+    b3.b3World_OverlapShape(world, position, [0, 0, 0], BAIT_SURFACE_OFFSET + 0.02, queryFilter, (shapeId: b3ShapeId) => {
+      if (bodyKey(b3.b3Shape_GetBody(shapeId)) !== bodyKey(levelBody)) return true;
+      onLevel = true;
+      return false;
+    });
+    if (!onLevel) return "bait must be placed on the sewer floor";
+    for (const other of baits) {
+      if (other.id === ignoreBait) continue;
+      if (Math.hypot(other.position[0] - position[0], other.position[2] - position[2]) < 0.55) {
+        return "bait pieces cannot overlap";
+      }
+    }
+    return null;
+  };
+
   return {
     world,
     ragdoll,
@@ -453,7 +589,10 @@ export function createSimulation(
     barrels,
     detonated: isDetonated,
     explosions: () => lastExplosions,
+    ratRoutes: () => ratRoutes,
+    baitConsumed: (id) => ratRoutes.some((route) => route.baitId === id && route.consumed),
     mineProblem,
+    baitProblem,
     resolve,
     refForBody: (body) => refs.get(bodyKey(body)) ?? null,
     applyForces,
