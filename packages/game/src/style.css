@@ -1,32 +1,51 @@
+/*
+ * The whole UI is sized in rem, and the root font size follows the viewport:
+ * 16px at 1280×720, scaled by whichever dimension is tighter so the layout
+ * always fits, within limits that keep text readable and not absurdly large.
+ */
+html {
+  --font-ui: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Chunky display face for big numbers and headline moments. */
+  --font-display: "Lilita One", var(--font-ui);
+  font-size: clamp(8px, min(1.25vw, 2.2222vh), 48px);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
   margin: 0;
   background: black;
+  font-size: 1rem;
 }
 
 #debug {
-  color: white;
   position: absolute;
-  top: 10px;
-  width: 100%;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  color: #aaa;
+  font-size: 0.75rem;
+  text-shadow: 0 0.0625rem 0.125rem black;
+  pointer-events: none;
   z-index: 100;
-  display: block;
 }
 
 #hud {
   position: absolute;
-  bottom: 16px;
+  bottom: 1rem;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   z-index: 100;
 }
 
 #hud button {
   font: inherit;
-  padding: 8px 14px;
+  font-weight: 500;
+  padding: 0.5rem 0.875rem;
   border: 1px solid #555;
-  border-radius: 6px;
+  border-radius: 0.375rem;
   background: #2a2a2a;
   color: white;
   white-space: nowrap;
@@ -46,12 +65,12 @@ body {
 
 #hint {
   position: absolute;
-  bottom: 64px;
+  bottom: 4rem;
   width: 100%;
   text-align: center;
   color: #ddd;
-  font-size: 14px;
-  text-shadow: 0 1px 2px black;
+  font-size: 0.875rem;
+  text-shadow: 0 0.0625rem 0.125rem black;
   pointer-events: none;
   z-index: 100;
 }
@@ -59,38 +78,48 @@ body {
 #aim-label {
   display: none;
   position: absolute;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
   background: rgba(0, 0, 0, 0.75);
   color: white;
-  font-size: 13px;
+  font-size: 0.8125rem;
   white-space: nowrap;
   pointer-events: none;
   z-index: 101;
 }
 
-#sidebar {
+/* Panels sit in a column on each side, clear of the hint and buttons below. */
+#left-column,
+#right-column {
   position: absolute;
-  top: 36px;
-  right: 12px;
-  bottom: 110px;
-  width: 214px;
+  top: 0.75rem;
+  bottom: 6rem;
+  width: 13.5rem;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
   overflow-y: auto;
+  scrollbar-width: none;
   z-index: 100;
   pointer-events: none;
+}
+
+#left-column {
+  left: 0.75rem;
+}
+
+#right-column {
+  right: 0.75rem;
 }
 
 #damage,
 #leaderboard {
   flex-shrink: 0;
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
   background: rgba(20, 20, 20, 0.8);
   color: #ddd;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 #leaderboard {
@@ -99,22 +128,25 @@ body {
 
 #damage .damage-title,
 #leaderboard .panel-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   color: #999;
 }
 
 #damage .damage-total {
-  font-size: 28px;
-  font-weight: bold;
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
   color: white;
-  font-variant-numeric: tabular-nums;
 }
 
 #damage .damage-figure {
   display: block;
-  width: 90px;
-  margin: 6px auto 8px;
+  width: 5.625rem;
+  margin: 0.375rem auto 0.5rem;
 }
 
 #damage .damage-figure .hit {
@@ -139,8 +171,8 @@ body {
 
 #leaderboard form {
   display: flex;
-  gap: 6px;
-  margin: 8px 0 4px;
+  gap: 0.375rem;
+  margin: 0.5rem 0 0.25rem;
 }
 
 #leaderboard form[hidden] {
@@ -151,18 +183,19 @@ body {
   flex: 1;
   min-width: 0;
   font: inherit;
-  padding: 5px 7px;
+  padding: 0.3125rem 0.4375rem;
   border: 1px solid #555;
-  border-radius: 4px;
+  border-radius: 0.25rem;
   background: #111;
   color: white;
 }
 
 #leaderboard form button {
   font: inherit;
-  padding: 5px 10px;
+  font-weight: 600;
+  padding: 0.3125rem 0.625rem;
   border: none;
-  border-radius: 4px;
+  border-radius: 0.25rem;
   background: #c9a227;
   color: black;
   cursor: pointer;
@@ -174,7 +207,7 @@ body {
 }
 
 #leaderboard .leaderboard-status {
-  margin: 4px 0;
+  margin: 0.25rem 0;
   color: #ccc;
 }
 
@@ -188,14 +221,14 @@ body {
 
 #leaderboard ol {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 0.375rem 0 0;
   padding: 0;
 }
 
 #leaderboard li {
   display: grid;
   grid-template-columns: 2em 1fr auto;
-  gap: 4px;
+  gap: 0.25rem;
   line-height: 1.6;
   font-variant-numeric: tabular-nums;
 }
@@ -208,7 +241,7 @@ body {
 
 #leaderboard li.mine {
   color: #ffd54f;
-  font-weight: bold;
+  font-weight: 600;
 }
 
 #leaderboard li.leaderboard-message {
@@ -218,14 +251,16 @@ body {
 
 #run-timer {
   position: absolute;
-  top: 12px;
+  top: 0.75rem;
   left: 50%;
   transform: translateX(-50%);
-  width: 280px;
+  width: 17.5rem;
   color: white;
-  font-size: 13px;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  letter-spacing: 0.03em;
   text-align: center;
-  text-shadow: 0 1px 2px black;
+  text-shadow: 0 0.0625rem 0.125rem black;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   z-index: 100;
@@ -236,17 +271,17 @@ body {
 }
 
 #run-timer .run-timer-track {
-  height: 10px;
-  margin-top: 4px;
-  border-radius: 5px;
+  height: 0.625rem;
+  margin-top: 0.25rem;
+  border-radius: 0.3125rem;
   background: rgba(255, 255, 255, 0.15);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0.0625rem 0.1875rem rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
 
 #run-timer .run-timer-fill {
   height: 100%;
-  border-radius: 5px;
+  border-radius: 0.3125rem;
 }
 
 #run-timer .run-timer-fill.refill {
@@ -256,6 +291,6 @@ body {
 @keyframes run-timer-refill {
   from {
     background-color: white;
-    box-shadow: 0 0 12px white;
+    box-shadow: 0 0 0.75rem white;
   }
 }

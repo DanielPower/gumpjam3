@@ -1,3 +1,5 @@
+import "@fontsource-variable/inter/wght.css";
+import "@fontsource/lilita-one";
 import "./style.css";
 import { Game } from "./game";
 import Box3D from 'box3d.js';

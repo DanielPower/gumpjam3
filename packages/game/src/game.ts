@@ -85,6 +85,9 @@ export const Game = async ({
   );
 
   const renderer = new THREE.WebGLRenderer();
+  // Render at the display's pixel density (capped, for performance) so the
+  // scene is sharp on high-DPI screens.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -187,13 +190,15 @@ export const Game = async ({
   let run: Run | null = null;
   const noDamage = BODY_PARTS.map(() => 0);
   const flashes = BODY_PARTS.map(() => ({ remaining: 0, strength: 0, color: new THREE.Color() }));
-  const sidebar = document.createElement("div");
-  sidebar.id = "sidebar";
-  container.appendChild(sidebar);
+  const leftColumn = document.createElement("div");
+  leftColumn.id = "left-column";
+  const rightColumn = document.createElement("div");
+  rightColumn.id = "right-column";
+  container.append(leftColumn, rightColumn);
   const damagePanel = new DamagePanel();
-  sidebar.appendChild(damagePanel.element);
+  leftColumn.appendChild(damagePanel.element);
   const leaderboard = leaderboardAvailable ? new LeaderboardPanel(LEVEL_ID) : null;
-  if (leaderboard) sidebar.appendChild(leaderboard.element);
+  if (leaderboard) rightColumn.appendChild(leaderboard.element);
   // The placements the current run started from, for submitting its score.
   let runPlacements: Placement[] = [];
 
@@ -613,8 +618,10 @@ export const Game = async ({
   const showAimLabel = (vector: THREE.Vector3, linger = false) => {
     const speed = vector.length() * VELOCITY_PER_METER;
     aimLabel.textContent = `${speed.toFixed(1)} m/s · ${describeAim(vector, forwardYaw)}`;
-    aimLabel.style.left = `${pointer.x + 18}px`;
-    aimLabel.style.top = `${pointer.y + 18}px`;
+    // Offset from the cursor in rem, so it scales with the rest of the UI.
+    const offset = 1.125 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+    aimLabel.style.left = `${pointer.x + offset}px`;
+    aimLabel.style.top = `${pointer.y + offset}px`;
     aimLabel.style.display = "block";
     window.clearTimeout(aimLabelTimeout);
     if (linger) aimLabelTimeout = window.setTimeout(() => (aimLabel.style.display = "none"), 900);
@@ -878,6 +885,7 @@ export const Game = async ({
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
