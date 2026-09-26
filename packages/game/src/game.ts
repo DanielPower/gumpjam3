@@ -572,6 +572,12 @@ export const Game = ({
 
   /** The placements as they'd be if the drag in progress were committed now. */
   const draft = (): Placement[] => {
+    if (drag?.kind === "place") {
+      if (!drag.moving || !drag.valid) return placements;
+      const next = [...placements];
+      next[drag.index] = drag.candidate;
+      return next;
+    }
     const pending = drag && dragPlacement(drag);
     if (!drag || !pending) return placements;
     if (drag.index === null) return [...placements, pending];
@@ -595,7 +601,7 @@ export const Game = ({
     forces.forEach(({ placement, index }, i) => {
       arrows[i].set(worldPointOf(placement.target, placement.localPoint), new THREE.Vector3(...placement.vector));
       if (iso) arrows[i].setView(iso.metresPerPixel, iso.camera);
-      arrows[i].setState({ selected: index === selected || (drag !== null && (drag.index ?? placements.length) === index) });
+      arrows[i].setState({ selected: index === selected || (drag !== null && drag.kind !== "place" && (drag.index ?? placements.length) === index) });
       arrowIndices.push(index);
     });
     forceArrows.visible = !running;
@@ -697,13 +703,17 @@ export const Game = ({
       return hints[drag.mode];
     }
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
+    if (drag?.kind === "place" && drag.moving) {
+      const thing = TOOL_LABELS[drag.candidate.kind].toLowerCase();
+      return drag.valid ? `Drag to move the ${thing}` : `The ${thing} can't go here · let go to put it back`;
+    }
     const current = selected !== null ? placements[selected] : null;
     if (current?.kind === "force") {
       return "Drag the white arrows for strength · the blue arrows to turn · the pink arrows to tilt · the base to move it";
     }
-    if (current?.kind === "box") return "Box selected";
-    if (current?.kind === "mine") return "Mine selected";
-    if (current?.kind === "bait") return "The rat charges along this line when the body approaches";
+    if (current?.kind === "box") return "Drag the box to move it";
+    if (current?.kind === "mine") return "Drag the mine to move it";
+    if (current?.kind === "bait") return "Drag the bait to move it · the rat charges along this line when the body approaches";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return `${tap} a surface to place a box`;
     if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
@@ -788,6 +798,17 @@ export const Game = ({
   const baitPositionFor = (hit: NonNullable<ReturnType<typeof pick>>) =>
     hit.normal.y >= 0.95 ? hit.point.clone().addScaledVector(hit.normal, BAIT_SURFACE_OFFSET) : null;
 
+  /** The index of the placed box, mine or bait under the pointer, or -1. */
+  const placedObjectAt = () => {
+    const baitId = hitBait();
+    if (baitId !== null) return placements.findIndex((p) => p.kind === "bait" && p.id === baitId);
+    const mineId = explosives.hitMine(raycaster);
+    if (mineId !== null) return placements.findIndex((p) => p.kind === "mine" && p.id === mineId);
+    const hit = pick();
+    const ref = hit && simulation.refForBody(hit.body);
+    return ref?.kind === "prop" ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id) : -1;
+  };
+
   const hitBait = () => {
     const [hit] = raycaster.intersectObjects([...baitMeshes.values()], true);
     let object: THREE.Object3D | null = hit?.object ?? null;
@@ -806,20 +827,25 @@ export const Game = ({
   baitPreview.visible = false;
   scene.add(baitPreview);
 
-  // --- Dragging forces ----------------------------------------------------------
+  // --- Dragging forces and placed objects --------------------------------------
 
   // "aim" sets a force's direction and strength from a fixed base point; "move"
   // slides the base point across bodies while keeping the vector. `index` is
   // the placement being edited, or null for a new force.
+  // "place" repositions a box, mine or bait: `candidate` is where it would go,
+  // and `valid` whether it can. It only starts moving once the pointer has
+  // (`moving`), so a click on it just selects it.
   type Drag =
     // `mode`: which part of the force the drag changes (see AimMode).
     | { kind: "aim"; index: number | null; target: BodyRef; localPoint: b3Vec3; aim: Aim; mode: AimMode }
-    | { kind: "move"; index: number; target: BodyRef; localPoint: b3Vec3; vector: b3Vec3 };
+    | { kind: "move"; index: number; target: BodyRef; localPoint: b3Vec3; vector: b3Vec3 }
+    | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean };
+  type MovablePlacement = Exclude<Placement, ForcePlacement>;
   let drag: Drag | null = null;
 
   const aimVector = (aim: Aim) => (modifiers.alt ? aim.raw.clone() : snapAim(aim.raw, forwardYaw));
 
-  function dragPlacement(d: Drag): ForcePlacement | null {
+  function dragPlacement(d: Exclude<Drag, { kind: "place" }>): ForcePlacement | null {
     if (d.kind === "move") return { kind: "force", target: d.target, localPoint: d.localPoint, vector: d.vector };
     const vector = aimVector(d.aim);
     if (vector.length() < MIN_ARROW_LENGTH) return null;
@@ -849,9 +875,66 @@ export const Game = ({
     updateDrag();
   };
 
+  /** The physics body of a placed box or mine; bait has none. */
+  const bodyOf = (placement: MovablePlacement) =>
+    placement.kind === "box" ? simulation.props.get(placement.id)
+    : placement.kind === "mine" ? simulation.mines.get(placement.id)
+    : undefined;
+
+  /** Move a dragged box, mine or bait to wherever is under the pointer, if it can go there. */
+  function updatePlaceDrag(d: Extract<Drag, { kind: "place" }>) {
+    if (!d.moving) {
+      const down = pointerDownAt;
+      if (!down || Math.hypot(pointer.x - down.x, pointer.y - down.y) < CLICK_SLOP_PX) return;
+      d.moving = true;
+      renderer.domElement.style.cursor = "grabbing";
+      // Out of the world while it moves, so it isn't in its own way.
+      const body = bodyOf(d.candidate);
+      if (body) b3.b3Body_Disable(body);
+    }
+    const hit = pick();
+    if (!hit) return;
+    const current = d.candidate;
+    if (current.kind === "box") {
+      const position = boxPositionFor(hit);
+      d.candidate = { ...current, position: position.toArray() };
+      d.valid = !simulation.boxOverlaps(d.candidate.position, current.id);
+    } else if (current.kind === "mine") {
+      d.candidate = { ...current, ...minePlacementFor(hit) };
+      d.valid = simulation.mineProblem(d.candidate.position, d.candidate.normal, current.id) === null;
+    } else {
+      const position = baitPositionFor(hit);
+      if (!position) return;
+      d.candidate = { ...current, position: position.toArray() };
+      d.valid = simulation.baitProblem(d.candidate.position, current.id) === null;
+    }
+
+    // Show it there, with any forces on it, and a red ghost over it if it can't stay.
+    const candidate = d.candidate;
+    const body = bodyOf(candidate);
+    if (body && candidate.kind === "mine") {
+      const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...candidate.normal));
+      b3.b3Body_SetTransform(body, candidate.position, [turn.x, turn.y, turn.z, turn.w]);
+    } else if (body) {
+      b3.b3Body_SetTransform(body, candidate.position, [0, 0, 0, 1]);
+    } else if (candidate.kind === "bait") {
+      baitMeshes.get(candidate.id)?.position.set(...candidate.position);
+    }
+    syncVisuals();
+    boxPreview.visible = candidate.kind === "box" && !d.valid;
+    boxPreview.position.set(...candidate.position);
+    (boxPreview.material as THREE.MeshBasicMaterial).color.set(0xff4040);
+    explosives.showPreview(candidate.kind === "mine" && !d.valid ? candidate : null, true);
+    baitPreview.visible = candidate.kind === "bait" && !d.valid;
+    baitPreview.position.set(...candidate.position);
+    baitPreviewMaterial.color.set(0xff4040);
+  }
+
   function updateDrag() {
     if (!drag) return;
-    if (drag.kind === "aim") {
+    if (drag.kind === "place") {
+      updatePlaceDrag(drag);
+    } else if (drag.kind === "aim") {
       drag.aim.update(raycaster.ray, drag.mode, activeCamera);
       const vector = aimVector(drag.aim);
       if (vector.length() >= MIN_ARROW_LENGTH) showAimLabel(vector);
@@ -867,8 +950,25 @@ export const Game = ({
     refreshForces();
   }
 
+  /** Hide the placement ghosts shown while dragging an object. */
+  const hidePlaceGhosts = () => {
+    boxPreview.visible = false;
+    baitPreview.visible = false;
+    explosives.showPreview(null);
+  };
+
   const finishDrag = () => {
     const d = drag!;
+    if (d.kind === "place") {
+      drag = null;
+      renderer.domElement.style.cursor = "";
+      hidePlaceGhosts();
+      // Somewhere it can't go puts it back where it was.
+      const original = placements[d.index];
+      if (d.moving && d.valid && JSON.stringify(d.candidate) !== JSON.stringify(original)) replacePlacement(d.index, d.candidate);
+      else if (d.moving) rebuild();
+      return;
+    }
     const placement = dragPlacement(d);
     drag = null;
     renderer.domElement.style.cursor = "";
@@ -880,10 +980,13 @@ export const Game = ({
 
   function cancelDrag() {
     if (!drag) return;
+    const wasMovingObject = drag.kind === "place" && drag.moving;
     drag = null;
     renderer.domElement.style.cursor = "";
     aimLabel.style.display = "none";
-    refreshForces();
+    hidePlaceGhosts();
+    if (wasMovingObject) rebuild();
+    else refreshForces();
   }
 
   const adjustStrength = (factor: number) => {
@@ -933,6 +1036,17 @@ export const Game = ({
         return;
       }
 
+      // With no tool, pressing a placed box, mine or bait selects it, and
+      // dragging moves it (rather than rotating the camera).
+      const object = tool === null ? placedObjectAt() : -1;
+      if (object >= 0) {
+        pointerDownHandled = true;
+        event.stopPropagation();
+        select(object);
+        drag = { kind: "place", index: object, moving: false, candidate: placements[object] as MovablePlacement, valid: true };
+        return;
+      }
+
       if (tool !== "force") return;
       const hit = pick();
       const target = hit && simulation.refForBody(hit.body);
@@ -959,6 +1073,7 @@ export const Game = ({
     let cursor = "";
     const cursors: Record<ArrowPart, string> = { shaft: "pointer", tilt: "ns-resize", heading: "grab", head: "grab", tail: "move" };
     if (arrowHit) cursor = cursors[arrowHit.part];
+    else if (tool === null && placedObjectAt() >= 0) cursor = "grab";
     else if (tool === "force") {
       const hit = pick();
       if (hit && simulation.refForBody(hit.body)) cursor = "crosshair";
