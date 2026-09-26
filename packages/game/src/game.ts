@@ -10,6 +10,7 @@ import {
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
   MINE_SURFACE_OFFSET,
+  TIME_STEP,
   VELOCITY_PER_METER,
   type BodyRef,
   type ForcePlacement,
@@ -39,6 +40,7 @@ import { leaderboardAvailable } from "./api";
 import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
 import { inventoryIcon } from "./inventory-icons";
+import { PoseInterpolator } from "./pose-interpolator";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
@@ -325,6 +327,16 @@ export const Game = async ({
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ragdollMeshes[bone]));
     if (physicsDebug?.object3d.visible) physicsDebug.update();
   };
+  /** Everything that moves with the physics, for drawing between steps. */
+  const physicsObjects = () => [
+    ...levelObjects.movers,
+    ...propMeshes.values(),
+    ...explosives.barrelMeshes,
+    ...ragdollMeshes,
+  ];
+  const interpolator = new PoseInterpolator();
+  /** Unsimulated time (seconds) carried between frames, less than a step once caught up. */
+  let stepBacklog = 0;
 
   const worldPointOf = (ref: BodyRef, localPoint: b3Vec3): THREE.Vector3 => {
     const out: b3Vec3 = [0, 0, 0];
@@ -349,6 +361,7 @@ export const Game = async ({
 
   /** Throw away the world and rebuild it at its initial state from `placements`. */
   const rebuild = () => {
+    interpolator.clear();
     simulation?.destroy();
     simulation = createSimulation(b3, map, placements);
 
@@ -519,6 +532,8 @@ export const Game = async ({
     selected = null;
     runPlacements = placements;
     run = startRun(simulation, level.runLimits);
+    // Moving things ease from where they start, not from after the first step.
+    interpolator.capture(physicsObjects());
     damagePanel.update(run.damage, runTitle(run));
     boxPreview.visible = false;
     baitPreview.visible = false;
@@ -1149,9 +1164,21 @@ export const Game = async ({
     lastTime = time;
 
     // The run waits for the camera to settle on the ragdoll, so nothing is missed.
+    // The physics steps at a fixed rate, however fast the screen refreshes;
+    // frames between steps draw moving things partway between them.
     if (running && run && !run.finished && !rig.transitioning) {
-      stepRun(run);
-      syncVisuals();
+      stepBacklog += Math.min(dt, 100) / 1000;
+      while (stepBacklog >= TIME_STEP && !run.finished) {
+        stepBacklog -= TIME_STEP;
+        interpolator.beginStep();
+        stepRun(run);
+        syncVisuals();
+        interpolator.capture(physicsObjects());
+      }
+      interpolator.apply(run.finished ? 1 : stepBacklog / TIME_STEP);
+    } else {
+      stepBacklog = 0;
+      if (running && run?.finished) interpolator.apply(1);
     }
     if (running) {
       const { center, velocity } = ragdollMotion();

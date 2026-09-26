@@ -123,6 +123,11 @@ export class ExplosivesView {
     for (const [id, mesh] of this.mines) mesh.visible = !simulation.detonated({ kind: "mine", id });
   }
 
+  /** The barrels' meshes, which move with their bodies. */
+  get barrelMeshes(): readonly THREE.Object3D[] {
+    return this.barrels;
+  }
+
   highlight(mineId: number | null) {
     for (const [id, mesh] of this.mines) {
       (mesh.children[0] as THREE.Mesh).material = id === mineId ? selectedMineMaterial : mineBodyMaterial;
