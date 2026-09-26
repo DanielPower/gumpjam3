@@ -13,6 +13,9 @@ entity = m.entity
 # --- worldspawn -------------------------------------------------------------
 world = []
 G = -2.5    # bottom of all ground slabs
+# How far the street runs each way (+z, -z). The -z end is longer, as the bus
+# starts deep in its tunnel.
+STREET_END, STREET_START = 31, -51
 R = -1.5    # street surface, 1.5 m below the pavement
 EDGE = -3.9  # where the pavement drops to the street, just past the stair foot
 FAR = EDGE - 10  # far side of the street
@@ -21,7 +24,7 @@ NEAR_LANE, FAR_LANE = (EDGE + MID) / 2, (MID + FAR) / 2
 # Pavement around the stairs, grass beyond.
 world.append(box(EDGE, 12, G, 0, -9, 9, "concrete", top="pavement"))
 world.append(box(EDGE, 12, G, 0, 9, 31, "concrete", top="grass"))
-world.append(box(EDGE, 12, G, 0, -31, -9, "concrete", top="grass"))
+world.append(box(EDGE, 12, G, 0, STREET_START, -9, "concrete", top="grass"))
 # Rooftop building the ragdoll starts on, with a parapet.
 world.append(box(2, 9, 0, 5, -3.5, 3.5, "brick", top="concrete"))
 world.append(box(8.6, 9, 5, 5.9, -3.5, 3.5, "concrete"))
@@ -37,7 +40,7 @@ for z in (-7.5, 7.5):
     world.append(box(EDGE, EDGE + 0.7, 4, 4.2, z - 0.25, z + 0.25, "yellow"))
     world.append(box(-2.5, 0.5, 0, 0.45, z + (1.3 if z > 0 else -1.3) - 0.3, z + (1.3 if z > 0 else -1.3) + 0.3, "wood"))
 # The street, running into tunnels at both ends.
-world.append(box(FAR - 2, EDGE, G, R, -31, 31, "concrete", top="asphalt"))
+world.append(box(FAR - 2, EDGE, G, R, STREET_START, STREET_END, "concrete", top="asphalt"))
 for k in range(-9, 10):  # dashed centre line
     z = k * 2.0
     world.append(box(MID - 0.08, MID + 0.08, R, R + 0.01, z - 0.5, z + 0.5, "stripe_yellow"))
@@ -50,13 +53,13 @@ world.append(box(FAR - 8, FAR - 2, G, R + 2.5, -18, 18, "brick", top="concrete")
 for z in range(-15, 16, 5):
     world.append(box(FAR - 2, FAR - 1.97, R + 0.5, R + 2.1, z - 1.6, z + 1.6, "glass"))  # on the shopfront, not in it
 world.append(box(FAR - 2, FAR - 1.75, R + 2.2, R + 2.6, -18, 18, "red"))  # trim along the roofline
-# Tunnels at both ends of the street; the vehicles loop round out of sight.
+# Tunnels at both ends of the street, where the vehicles start and end out of sight.
 for s in (1, -1):
-    z0, z1 = (18, 31) if s > 0 else (-31, -18)
+    z0, z1 = (18, STREET_END) if s > 0 else (STREET_START, -18)
     world.append(box(FAR - 8, FAR, R, 5, z0, z1, "concrete"))
     world.append(box(EDGE, EDGE + 2, 0, 5, z0, z1, "concrete"))
     world.append(box(FAR, EDGE, 3, 5, z0, z1, "concrete", bottom="dark"))
-    back = (30, 31) if s > 0 else (-31, -30)
+    back = (STREET_END - 1, STREET_END) if s > 0 else (STREET_START, STREET_START + 1)
     world.append(box(FAR, EDGE, R, 3, back[0], back[1], "dark"))
     mouth = 18 if s > 0 else -18
     lz0, lz1 = sorted((mouth, mouth - 0.3 * s))
@@ -107,13 +110,14 @@ def bus(x, z, colour):
             parts.append(box(wx, wx + 0.3, R, R + 0.8, wz - 0.42, wz + 0.42, "rubber"))
     return parts
 
-# A car in the near lane heading -z, fast; it starts just out of its tunnel and
-# comes round every 3.9 s.
-entity({"classname": "func_mover", "move": f"0 {fmt(55 * U)} 0", "speed": fmt(14 * U), "mode": "loop",
-        "phase": "0.2"}, car(NEAR_LANE, 27.5, "red"))
-# A bus in the far lane heading +z, slower: every 6 s.
-entity({"classname": "func_mover", "move": f"0 {fmt(-54 * U)} 0", "speed": fmt(9 * U), "mode": "loop",
-        "phase": "0.25"}, bus(FAR_LANE, -27, "yellow"))
+# A car in the near lane heading -z, fast; it starts just inside its tunnel and
+# drives down the street once, passing the stairs about 1.6 s in.
+entity({"classname": "func_car", "move": f"0 {fmt(49.5 * U)} 0", "speed": fmt(14 * U),
+        "mass": "1200"}, car(NEAR_LANE, 22, "red"))
+# A bus in the far lane heading +z, slower, from deep in its tunnel: it passes
+# the stairs about 4.4 s in.
+entity({"classname": "func_car", "move": f"0 {fmt(-67 * U)} 0", "speed": fmt(9 * U),
+        "mass": "8000"}, bus(FAR_LANE, -40, "yellow"))
 
 # --- player start -----------------------------------------------------------------
 px, py, pz = tb(2.35, 5, 0)

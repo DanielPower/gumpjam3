@@ -49,6 +49,13 @@
 	phase(string) : "How far along its cycle it starts, 0-1" : "0"
 ]
 
+@SolidClass = func_car : "A car: drives along its road once, until it hits something or reaches the end, then coasts" [
+	move(string) : "The road, as an offset from where it starts, in map units" : "0 0 0"
+	speed(string) : "Cruising speed, map units per second" : "256"
+	phase(string) : "How far along the road it starts, 0-1" : "0"
+	mass(string) : "Kilograms" : "1200"
+]
+
 @SolidClass = func_rat : "Makes one charge through player-placed cheese bait" [
 	origin(string) : "Home position and rotation pivot in map units"
 	speed(string) : "Charge speed in map units per second" : "320"

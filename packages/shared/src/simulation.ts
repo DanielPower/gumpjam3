@@ -64,6 +64,19 @@ const ROPE_DENSITY = 1300;
 /** Each rope's capsules share a collision group (the negative of this plus its index), so they don't collide with each other. */
 const ROPE_GROUP_BASE = 100;
 
+/*
+ * Cars (func_car) are physics bodies driven by a steady push towards their
+ * cruising speed, like a driver holding the throttle. They slide on the road
+ * with little friction, as if rolling. Each drives its road once: once it hits
+ * anything that isn't the static level, or reaches the end of the road, the
+ * driver lifts off and it just coasts from then on.
+ */
+/** The most a car's engine accelerates it (m/s²). */
+const CAR_MAX_ACCELERATION = 6;
+/** How hard the throttle responds to being under cruising speed (per second). */
+const CAR_THROTTLE_GAIN = 10;
+const CAR_SURFACE: SurfaceMaterial = { friction: 0.2, restitution: 0.1 };
+
 /** Mines may touch other things, but not overlap them by more than this (metres). */
 const MINE_OVERLAP_TOLERANCE = 0.01;
 export const MINE_BLAST = { radius: 3.5, speed: 16 };
@@ -303,8 +316,33 @@ export function createSimulation(
   const levelBody = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
   for (const solid of solids.statics) addBrushes(levelBody, solid.brushes, solid.material);
 
+  /** Cars, by their index in `movers`: which way they drive, and whether the driver still is. */
+  const cars = new Map<number, { direction: THREE.Vector3; start: THREE.Vector3; length: number; speed: number; driving: boolean }>();
+  const carKeys = new Map<string, number>();
+
   const movers = solids.movers.map((mover, index) => {
     const bodyDef = b3.b3DefaultBodyDef();
+    if (mover.motion.kind === "car") {
+      const { offset, speed, phase, mass } = mover.motion;
+      const direction = offset.clone().normalize();
+      bodyDef.type = b3.b3BodyType.b3_dynamicBody;
+      bodyDef.position = mover.pivot.clone().addScaledVector(offset, phase).toArray();
+      bodyDef.linearVelocity = direction.clone().multiplyScalar(speed).toArray();
+      const body = b3.b3CreateBody(world, bodyDef);
+      addBrushes(body, mover.brushes, CAR_SURFACE);
+      // Scale the (default) density so the car weighs `mass`, whatever its shape.
+      const shapes = b3.b3Body_GetShapes(body);
+      const density = (b3.b3DefaultShapeDef().density * mass) / Math.max(b3.b3Body_GetMass(body), 1e-6);
+      for (const shape of shapes) {
+        b3.b3Shape_SetDensity(shape, density, false);
+        b3.b3Shape_EnableHitEvents(shape, true);
+      }
+      shapes.delete();
+      b3.b3Body_ApplyMassFromShapes(body);
+      cars.set(index, { direction, start: mover.pivot.clone(), length: offset.length(), speed, driving: true });
+      carKeys.set(bodyKey(body), index);
+      return body;
+    }
     bodyDef.type = b3.b3BodyType.b3_kinematicBody;
     const start = mover.motion.kind === "path"
       ? mover.pivot.clone().addScaledVector(mover.motion.offset, pathProgress(mover.motion, 0))
@@ -323,6 +361,23 @@ export function createSimulation(
   const driveMovers = () => {
     const identity: [number, number, number, number] = [0, 0, 0, 1];
     solids.movers.forEach(({ motion, pivot }, i) => {
+      const car = cars.get(i);
+      if (car) {
+        if (!car.driving) return;
+        const body = movers[i];
+        const position = new THREE.Vector3(...b3.b3Body_GetPosition([0, 0, 0], body));
+        if (position.clone().sub(car.start).dot(car.direction) >= car.length) {
+          car.driving = false;
+          return;
+        }
+        const velocity = new THREE.Vector3(...b3.b3Body_GetLinearVelocity([0, 0, 0], body));
+        // Enough to overcome the road's friction, plus more the further it's under speed.
+        const cruise = CAR_SURFACE.friction * 9.8;
+        const acceleration = THREE.MathUtils.clamp(cruise + CAR_THROTTLE_GAIN * (car.speed - velocity.dot(car.direction)), 0, CAR_MAX_ACCELERATION);
+        const force = car.direction.clone().multiplyScalar(b3.b3Body_GetMass(body) * acceleration);
+        b3.b3Body_ApplyForceToCenter(body, force.toArray(), true);
+        return;
+      }
       if (motion.kind === "path") {
         const now = pathProgress(motion, stepCount * TIME_STEP);
         const next = pathProgress(motion, (stepCount + 1) * TIME_STEP);
@@ -655,8 +710,14 @@ export function createSimulation(
     b3.getEvents(events, world);
     for (let i = 0; i < b3.getNumContactHitEvents(events); i++) {
       b3.getContactHitEventAt(hitEvent, events, i);
-      const a = refs.get(bodyKey(b3.b3Shape_GetBody(hitEvent.shapeIdA)));
-      const b = refs.get(bodyKey(b3.b3Shape_GetBody(hitEvent.shapeIdB)));
+      const [keyA, keyB] = [hitEvent.shapeIdA, hitEvent.shapeIdB].map((shape) => bodyKey(b3.b3Shape_GetBody(shape)));
+      // A car that hits anything but the static level stops driving.
+      for (const [car, other] of [[keyA, keyB], [keyB, keyA]]) {
+        const index = carKeys.get(car);
+        if (index !== undefined && other !== bodyKey(levelBody)) cars.get(index)!.driving = false;
+      }
+      const a = refs.get(keyA);
+      const b = refs.get(keyB);
       // A barrel hit hard enough goes off.
       for (const ref of [a, b]) {
         if (ref?.kind === "barrel" && hitEvent.approachSpeed > BARREL_IMPACT_SPEED) schedule(ref, stepCount);

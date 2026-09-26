@@ -45,7 +45,9 @@ export type StaticSolid = { brushes: BrushGeometry[]; material: SurfaceMaterial 
 export type MoverMotion =
   | { kind: "rotate"; angularVelocity: THREE.Vector3 }
   | { kind: "path"; offset: THREE.Vector3; speed: number; loop: boolean; phase: number }
-  | { kind: "rat"; speed: number; delay: number; forward: THREE.Vector3 };
+  | { kind: "rat"; speed: number; delay: number; forward: THREE.Vector3 }
+  /** A physics car driving once along `offset` at `speed`, until it hits something or gets to the end. */
+  | { kind: "car"; offset: THREE.Vector3; speed: number; phase: number; mass: number };
 
 export type MovingSolid = {
   /** Index into map.entities, for looking the entity up again. */
@@ -117,6 +119,20 @@ export function levelSolids(map: TrenchBroomMap): LevelSolids {
           speed: mapUnitsToMeters(number(entity, "speed", 256)),
           loop: entity.properties.mode !== "pingpong",
           phase: THREE.MathUtils.euclideanModulo(number(entity, "phase", 0), 1),
+        },
+      });
+    } else if (classname === "func_car") {
+      const pivot = brushBounds(brushes).getCenter(new THREE.Vector3());
+      movers.push({
+        entityIndex,
+        pivot,
+        brushes: relativeTo(brushes, pivot),
+        motion: {
+          kind: "car",
+          offset: mapVectorToWorld(entity.properties.move) ?? new THREE.Vector3(),
+          speed: mapUnitsToMeters(number(entity, "speed", 256)),
+          phase: THREE.MathUtils.euclideanModulo(number(entity, "phase", 0), 1),
+          mass: Math.max(1, number(entity, "mass", 1200)),
         },
       });
     } else if (classname === "func_rat") {
