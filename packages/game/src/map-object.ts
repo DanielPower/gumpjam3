@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { levelSolids } from "@stairs/shared/level-entities";
 import type { BrushGeometry, TrenchBroomMap } from "@stairs/shared/trenchbroom-map";
+import { visibleFaces } from "./brush-csg";
 
 const DEFAULT_COLOR = 0x78909c;
 
@@ -44,26 +45,36 @@ const TEXTURE_COLORS: Record<string, number> = {
 
 const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
 
-/** One mesh for a set of brushes, coloured per face from its texture name. */
+/**
+ * One mesh for a set of brushes, coloured per face from its texture name. Only
+ * the faces' visible parts are drawn: where brushes touch or overlap, the
+ * buried faces are left out, so they can't cast shadows or z-fight.
+ */
 function brushMesh(brushes: BrushGeometry[]) {
   const positions: number[] = [];
+  const normals: number[] = [];
   const colors: number[] = [];
   const color = new THREE.Color();
-  for (const brush of brushes) {
-    brush.faces.forEach((face, faceIndex) => {
-      color.setHex(TEXTURE_COLORS[brush.textures[faceIndex]] ?? DEFAULT_COLOR, THREE.SRGBColorSpace);
-      for (let index = 1; index < face.length - 1; index++) {
-        for (const vertexIndex of [face[0], face[index], face[index + 1]]) {
-          positions.push(...brush.vertices[vertexIndex].toArray());
-          colors.push(color.r, color.g, color.b);
-        }
+  for (const face of visibleFaces(brushes)) {
+    color.setHex(TEXTURE_COLORS[face.texture] ?? DEFAULT_COLOR, THREE.SRGBColorSpace);
+    // Fan out from the centre, not a corner: pieces can have several corners in
+    // a row along an edge (added to close T-junctions), and a fan from a corner
+    // would bridge them with one long edge, reopening the crack.
+    const centre = face.vertices.reduce((sum, v) => sum.add(v), new THREE.Vector3()).divideScalar(face.vertices.length);
+    for (let index = 0; index < face.vertices.length; index++) {
+      const b = face.vertices[index];
+      const c = face.vertices[(index + 1) % face.vertices.length];
+      for (const vertex of [centre, b, c]) {
+        positions.push(vertex.x, vertex.y, vertex.z);
+        normals.push(face.normal.x, face.normal.y, face.normal.z);
+        colors.push(color.r, color.g, color.b);
       }
-    });
+    }
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;

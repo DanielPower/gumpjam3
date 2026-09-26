@@ -48,8 +48,8 @@ world.append(box(FAR - 2, FAR, R, R + 0.15, -18, 18, "concrete", top="pavement")
 # Single-storey shopfronts, low enough not to hide the street from the edit camera.
 world.append(box(FAR - 8, FAR - 2, G, R + 2.5, -18, 18, "brick", top="concrete"))
 for z in range(-15, 16, 5):
-    world.append(box(FAR - 2.05, FAR - 2, R + 0.5, R + 2.1, z - 1.6, z + 1.6, "glass"))
-world.append(box(FAR - 2.3, FAR - 2, R + 2.2, R + 2.6, -18, 18, "red"))  # trim along the roofline
+    world.append(box(FAR - 2, FAR - 1.97, R + 0.5, R + 2.1, z - 1.6, z + 1.6, "glass"))  # on the shopfront, not in it
+world.append(box(FAR - 2, FAR - 1.75, R + 2.2, R + 2.6, -18, 18, "red"))  # trim along the roofline
 # Tunnels at both ends of the street; the vehicles loop round out of sight.
 for s in (1, -1):
     z0, z1 = (18, 31) if s > 0 else (-31, -18)
@@ -94,7 +94,7 @@ entity({"classname": "func_bouncy", "restitution": "2", "friction": "0.3"},
 def car(x, z, colour):
     parts = [box(x - 0.95, x + 0.95, R + 0.25, R + 0.95, z - 2.2, z + 2.2, colour)]
     parts.append(box(x - 0.85, x + 0.85, R + 0.95, R + 1.55, z - 1.2, z + 1.0, "glass", top=colour))
-    for wx in (x - 0.95, x + 0.65):
+    for wx in (x - 1.0, x + 0.7):  # tyres stand 5 cm proud of the body, so they don't z-fight
         for wz in (z - 1.4, z + 1.4):
             parts.append(box(wx, wx + 0.3, R, R + 0.6, wz - 0.32, wz + 0.32, "rubber"))
     return parts
@@ -102,7 +102,7 @@ def car(x, z, colour):
 def bus(x, z, colour):
     parts = [box(x - 1.25, x + 1.25, R + 0.35, R + 3.1, z - 4.6, z + 4.6, colour, top="white")]
     parts.append(box(x - 1.3, x + 1.3, R + 1.6, R + 2.5, z - 4.2, z + 3.6, "glass", top=colour))
-    for wx in (x - 1.25, x + 0.95):
+    for wx in (x - 1.3, x + 1.0):
         for wz in (z - 3.0, z + 3.0):
             parts.append(box(wx, wx + 0.3, R, R + 0.8, wz - 0.42, wz + 0.42, "rubber"))
     return parts

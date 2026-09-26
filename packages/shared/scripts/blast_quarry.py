@@ -56,7 +56,7 @@ tx, tz = -7.5, 4.3
 world.append(box(tx - 2.6, tx + 2.0, PIT + 0.5, PIT + 1.1, tz - 1.1, tz + 1.1, "yellow"))
 world.append(box(tx - 2.6, tx + 0.4, PIT + 1.1, PIT + 2.2, tz - 1.2, tz + 1.2, "yellow", top="rust"))
 world.append(box(tx + 0.6, tx + 2.0, PIT + 1.1, PIT + 2.5, tz - 1.0, tz + 1.0, "yellow"))
-world.append(box(tx + 1.95, tx + 2.0, PIT + 1.7, PIT + 2.3, tz - 0.85, tz + 0.85, "glass"))
+world.append(box(tx + 2.0, tx + 2.03, PIT + 1.7, PIT + 2.3, tz - 0.85, tz + 0.85, "glass"))  # proud of the cab
 for wx in (tx - 1.8, tx + 1.3):
     for wz in (tz - 1.25, tz + 0.95):
         world.append(box(wx - 0.5, wx + 0.5, PIT, PIT + 1.0, wz, wz + 0.3, "rubber"))
