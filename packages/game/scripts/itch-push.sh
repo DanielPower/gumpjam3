@@ -3,8 +3,8 @@
 set -eu
 
 channel="html5"
-archive=".itch/stairs.zip"
-target="danielpower/stairs"
+archive=".itch/tripping-hazard.zip"
+target="danielpower/tripping-hazard"
 
 if ! command -v butler >/dev/null 2>&1; then
   echo "Error: butler is not installed or is not on PATH." >&2
