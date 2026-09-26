@@ -23,7 +23,8 @@ export const MAX_ARROW_LENGTH = 1.5;
 export const MIN_ARROW_LENGTH = 0.05;
 /** Boxes may touch other things, but not overlap them by more than this. */
 const BOX_OVERLAP_TOLERANCE = 0.01;
-const PROP_DENSITY = 0.6;
+/** Solid wood (kg/m³): a box weighs 75 kg, enough to hold its own against the ragdoll. */
+const PROP_DENSITY = 600;
 const RAGDOLL_GROUP = 1;
 const RAGDOLL_JOINT_FRICTION = 0.05;
 /** Contacts approaching slower than this (m/s) aren't reported as hits. */
