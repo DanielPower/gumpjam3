@@ -23,7 +23,8 @@ import {
   syncObjectToBody,
   type PhysicsDebugRenderer,
 } from "./box3d-three";
-import { CameraRig, type CameraView } from "./camera-rig";
+import { CameraRig } from "./camera-rig";
+import { IsometricCamera } from "./iso-camera";
 import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
 import { Aim, describeAim, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
@@ -40,9 +41,8 @@ const PICK_DISTANCE = 100;
 const CLICK_SLOP_PX = 5;
 /** Strength multiplier per scroll notch or [ ] key press. */
 const STRENGTH_STEP = 1.1;
-const DOUBLE_CLICK_MS = 400;
-/** Initial camera position relative to the ragdoll, looking down on it. */
-const CAMERA_OFFSET = new THREE.Vector3(-2, 1.5, 4.5);
+/** A run's follow camera starts this far from the ragdoll, in the edit camera's direction. */
+const RUN_CAMERA_DISTANCE = 5;
 /** While following, aim this far ahead along the ragdoll's velocity. */
 const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
@@ -99,8 +99,12 @@ export const Game = async ({
   // Snapping and aim descriptions are relative to the way the ragdoll faces.
   const forwardYaw = spawnEntity ? getEntityWorldYaw(spawnEntity) : 0;
 
+  // Two camera schemes: an isometric camera for editing (created once the
+  // ragdoll exists, below) and an orbiting follow camera for runs.
   const rig = new CameraRig(camera, renderer.domElement);
-  const controls = rig.controls;
+  rig.controls.enabled = false;
+  let iso: IsometricCamera;
+  let activeCamera: THREE.Camera = camera;
 
   const debugElement = document.createElement("div");
   debugElement.id = "debug";
@@ -373,8 +377,11 @@ export const Game = async ({
     updateHud();
   };
 
-  // The setup view to return to on reset.
-  let setupView: CameraView | null = null;
+  const useEditCamera = (editing: boolean) => {
+    iso.enabled = editing;
+    rig.controls.enabled = !editing;
+    activeCamera = editing ? iso.camera : camera;
+  };
 
   const stopRunning = () => {
     if (!running) return;
@@ -382,14 +389,30 @@ export const Game = async ({
     for (const flash of flashes) flash.remaining = 0;
     damagePanel.update(run?.damage ?? noDamage, "Last run");
     leaderboard?.withdraw();
+    // Ease back to the edit camera right where the run left off, keeping the
+    // horizontal rotation and framing. It takes over once the transition ends.
     rig.follow(null);
-    if (setupView) rig.glideTo(setupView);
+    const view = rig.orthographicView;
+    // A ragdoll flung off the level ends the run in empty space, so stay within
+    // the level: settle on the nearest part of it instead.
+    view.focus.clamp(level.bounds.min, level.bounds.max);
+    iso.setView(view.focus, view.direction, view.viewHeight);
+    rig.transitionTo({ focus: view.focus, direction: iso.direction, viewHeight: iso.viewHeight }, () =>
+      useEditCamera(true),
+    );
   };
 
   const play = () => {
     if (running) return;
     cancelDrag();
-    setupView = rig.view;
+    // Start the follow camera looking from the same direction as the edit view.
+    // Ease from the edit view into it, rather than cutting straight to the ragdoll.
+    const center = ragdollMotion().center;
+    rig.transitionInto(
+      { target: center, position: center.clone().addScaledVector(iso.direction, RUN_CAMERA_DISTANCE) },
+      { focus: iso.viewCenter(), viewHeight: iso.viewHeight, direction: iso.direction },
+    );
+    useEditCamera(false);
     running = true;
     tool = null;
     selected = null;
@@ -525,7 +548,7 @@ export const Game = async ({
     if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return "Click a surface to place a box";
-    return "1: add a force · 2: add a box · click an arrow or box to edit it · double-click to look somewhere · F to recentre";
+    return "1: add a force · 2: add a box · click an arrow or box to edit it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
   };
 
   // --- Picking ----------------------------------------------------------------
@@ -546,7 +569,7 @@ export const Game = async ({
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
-    raycaster.setFromCamera(pointerNdc, camera);
+    raycaster.setFromCamera(pointerNdc, activeCamera);
   };
 
   const pick = () => {
@@ -629,7 +652,6 @@ export const Game = async ({
 
   const startDrag = (next: Drag) => {
     drag = next;
-    controls.enabled = false;
     renderer.domElement.style.cursor = "grabbing";
     updateDrag();
   };
@@ -637,7 +659,7 @@ export const Game = async ({
   function updateDrag() {
     if (!drag) return;
     if (drag.kind === "aim") {
-      drag.aim.update(raycaster.ray, modifiers.shift ? "vertical" : "horizontal", camera);
+      drag.aim.update(raycaster.ray, modifiers.shift ? "vertical" : "horizontal", activeCamera);
       const vector = aimVector(drag.aim);
       if (vector.length() >= MIN_ARROW_LENGTH) showAimLabel(vector);
       else aimLabel.style.display = "none";
@@ -656,7 +678,6 @@ export const Game = async ({
     const d = drag!;
     const placement = dragPlacement(d);
     drag = null;
-    controls.enabled = true;
     renderer.domElement.style.cursor = "";
     aimLabel.style.display = "none";
     if (!placement) refreshForces();
@@ -667,7 +688,6 @@ export const Game = async ({
   function cancelDrag() {
     if (!drag) return;
     drag = null;
-    controls.enabled = true;
     renderer.domElement.style.cursor = "";
     aimLabel.style.display = "none";
     refreshForces();
@@ -686,12 +706,12 @@ export const Game = async ({
   // --- Input ------------------------------------------------------------------
 
   let pointerDownAt: { x: number; y: number } | null = null;
-  let lastClick: { time: number; x: number; y: number } | null = null;
   // Set when pointerdown already did something, so pointerup isn't also a click.
   let pointerDownHandled = false;
 
-  // Capture phase on the container so we can disable OrbitControls before its
-  // own pointerdown handler on the canvas runs.
+  // Capture phase on the container, so this runs before the cameras' own
+  // pointer handlers on the canvas. A press used for editing stops here, so it
+  // doesn't also rotate the edit camera.
   container.addEventListener(
     "pointerdown",
     (event) => {
@@ -704,6 +724,7 @@ export const Game = async ({
       const arrowHit = hitArrow();
       if (arrowHit) {
         pointerDownHandled = true;
+        event.stopPropagation();
         select(arrowHit.index);
         const force = placements[arrowHit.index] as ForcePlacement;
         const origin = worldPointOf(force.target, force.localPoint);
@@ -721,6 +742,7 @@ export const Game = async ({
       const target = hit && simulation.refForBody(hit.body);
       if (!hit || !target) return;
       pointerDownHandled = true;
+      event.stopPropagation();
       const localPoint: b3Vec3 = [0, 0, 0];
       b3.b3Body_GetLocalPoint(localPoint, hit.body, hit.point.toArray());
       startDrag({ kind: "aim", index: null, target, localPoint, aim: new Aim(hit.point) });
@@ -772,14 +794,6 @@ export const Game = async ({
       event.target === renderer.domElement &&
       Math.hypot(event.clientX - down.x, event.clientY - down.y) < CLICK_SLOP_PX;
     if (!isClick || running) return;
-    // The second click of a double-click only refocuses the camera.
-    const now = performance.now();
-    const isDouble =
-      lastClick !== null &&
-      now - lastClick.time < DOUBLE_CLICK_MS &&
-      Math.hypot(event.clientX - lastClick.x, event.clientY - lastClick.y) < CLICK_SLOP_PX;
-    lastClick = { time: now, x: event.clientX, y: event.clientY };
-    if (isDouble) return;
     setPointer(event);
     const hit = pick();
 
@@ -796,17 +810,6 @@ export const Game = async ({
     const ref = hit && simulation.refForBody(hit.body);
     const index = ref?.kind === "prop" ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id) : -1;
     select(index >= 0 ? index : null);
-  });
-
-  // Double-click refocuses the camera: on the ragdoll, or on any other surface
-  // (e.g. to place a box further down the stairs).
-  renderer.domElement.addEventListener("dblclick", (event) => {
-    if (running) return;
-    setPointer(event);
-    const hit = pick();
-    if (!hit) return;
-    const ref = simulation.refForBody(hit.body);
-    rig.focusOn(ref?.kind === "ragdoll" ? ragdollMotion().center : hit.point);
   });
 
   // Scrolling over the selected arrow changes its strength instead of zooming.
@@ -859,7 +862,7 @@ export const Game = async ({
         undo();
         break;
       case "KeyF":
-        if (!running) rig.focusOn(ragdollMotion().center);
+        if (!running) iso.centerOn(ragdollMotion().center);
         break;
       case "Delete":
       case "Backspace":
@@ -885,16 +888,25 @@ export const Game = async ({
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    iso.resize();
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
   rebuild();
 
-  // Start anchored on the ragdoll, looking down on it so horizontal aiming isn't
-  // edge-on to the camera.
-  const start = ragdollMotion().center;
-  rig.setView({ target: start, position: start.clone().add(CAMERA_OFFSET) });
+  // Editing starts in the isometric view, centred on the ragdoll. Rotation
+  // pivots on whatever the view is centred on, found with a physics raycast.
+  iso = new IsometricCamera(renderer.domElement, ragdollMotion().center, (ray) => {
+    const result = b3.b3World_CastRayClosest(
+      simulation.world,
+      ray.origin.toArray(),
+      ray.direction.clone().multiplyScalar(PICK_DISTANCE).toArray(),
+      queryFilter,
+    );
+    return result.hit ? new THREE.Vector3(...result.point) : null;
+  });
+  useEditCamera(true);
 
   const trajectory = createTrajectoryPreview(b3, map, ragdollMeshes);
   scene.add(trajectory.object3d);
@@ -914,7 +926,8 @@ export const Game = async ({
     const dt = time - lastTime;
     lastTime = time;
 
-    if (running && run && !run.finished) {
+    // The run waits for the camera to settle on the ragdoll, so nothing is missed.
+    if (running && run && !run.finished && !rig.transitioning) {
       stepRun(run);
       syncVisuals();
     }
@@ -928,9 +941,10 @@ export const Game = async ({
     trajectory.object3d.visible = !running && previewEnabled;
     runTimer.update(running ? run : null);
     rig.update(Math.min(dt, 100) / 1000);
+    iso.update(Math.min(dt, 100) / 1000);
     updateFlashes(Math.min(dt, 100) / 1000);
 
-    renderer.render(scene, camera);
+    renderer.render(scene, activeCamera);
     debugElement.innerText = debugInfo({ dt });
     const hintText = hint();
     if (hintElement.textContent !== hintText) hintElement.textContent = hintText;
