@@ -39,8 +39,15 @@ export type SurfacePicker = (ray: THREE.Ray) => THREE.Vector3 | null;
  *   twist to rotate.
  * Panning moves the camera in its view plane by exactly the world distance
  * under the pointer, so what you grab stays under the cursor (or fingers) at
- * any zoom level. Mouse rotation pivots on whatever is at the centre of the
- * view; a twist pivots between the fingers, so the scene turns under them.
+ * any zoom level. A twist pivots between the fingers, so the scene turns
+ * under them.
+ *
+ * Mouse rotation pivots on the point at the centre of the view at a remembered
+ * height, not on whatever surface happens to be there. Rotating keeps that
+ * point centred, so the next rotation turns around the same spot even if a
+ * taller or shorter object has swung into the middle. The height is only
+ * re-read from the scene when the player moves the view on purpose (panning,
+ * or centring on something).
  */
 export class IsometricCamera {
   readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, DISTANCE * 4);
@@ -58,6 +65,8 @@ export class IsometricCamera {
   private pinch: { x: number; y: number; distance: number; angle: number } | null = null;
   /** A twist turns around the vertical line through the point between the fingers, at this height. */
   private twistHeight = 0;
+  /** Rotation pivots on the point at the centre of the view at this height. */
+  private pivotHeight: number;
   private glide: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number } | null = null;
 
   constructor(
@@ -70,6 +79,7 @@ export class IsometricCamera {
     this.yaw = yaw;
     this.camera.zoom = THREE.MathUtils.clamp(VIEW_HEIGHT / viewHeight, MIN_ZOOM, MAX_ZOOM);
     this.pickSurface = pickSurface;
+    this.pivotHeight = focus.y;
     this.updateDirection();
     this.lookFrom(focus);
     this.resize();
@@ -93,7 +103,7 @@ export class IsometricCamera {
         event.pointerType === "touch" || event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
       if (!mode) return;
       this.glide = null;
-      const pivot = mode === "rotate" ? this.viewCenter() : this.focus;
+      const pivot = mode === "rotate" ? this.pivot() : this.focus;
       this.drag = { mode, button: event.button, x: event.clientX, y: event.clientY, pivot };
       domElement.setPointerCapture(event.pointerId);
     });
@@ -119,9 +129,13 @@ export class IsometricCamera {
     });
     const endDrag = (event: PointerEvent) => {
       this.touches.delete(event.pointerId);
-      if (this.touches.size < 2) this.pinch = null;
+      if (this.touches.size < 2 && this.pinch) {
+        this.pinch = null;
+        this.repivot();
+      }
       if (!this.drag) return;
       if (event.type === "pointerup" && event.button !== this.drag.button) return;
+      if (this.drag.mode === "pan") this.repivot();
       this.drag = null;
       if (domElement.hasPointerCapture(event.pointerId)) domElement.releasePointerCapture(event.pointerId);
     };
@@ -169,6 +183,23 @@ export class IsometricCamera {
     return VIEW_HEIGHT / this.camera.zoom;
   }
 
+  /** The point rotation turns around: at the centre of the view, at the pivot height. */
+  private pivot() {
+    const ray = this.rayAt(...this.centreOnScreen());
+    return ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.pivotHeight), new THREE.Vector3()) ?? this.focus;
+  }
+
+  private centreOnScreen(): [number, number] {
+    const rect = this.domElement.getBoundingClientRect();
+    return [rect.left + rect.width / 2, rect.top + rect.height / 2];
+  }
+
+  /** Pivot at the height of whatever is now at the centre of the view, if anything. */
+  private repivot() {
+    const centre = this.pickSurface(this.rayAt(...this.centreOnScreen()));
+    if (centre) this.pivotHeight = centre.y;
+  }
+
   /** The scene point at the centre of the view, or the focus if there's nothing there. */
   viewCenter() {
     this.camera.updateMatrixWorld();
@@ -190,10 +221,12 @@ export class IsometricCamera {
     this.camera.zoom = THREE.MathUtils.clamp(VIEW_HEIGHT / viewHeight, MIN_ZOOM, MAX_ZOOM);
     this.camera.updateProjectionMatrix();
     this.lookFrom(focus);
+    this.pivotHeight = focus.y;
   }
 
   /** Glide so `point` is at the centre of the view. */
   centerOn(point: THREE.Vector3) {
+    this.pivotHeight = point.y;
     this.glide = {
       from: this.camera.position.clone(),
       to: point.clone().addScaledVector(this.direction, DISTANCE),
