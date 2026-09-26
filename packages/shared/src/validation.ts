@@ -8,6 +8,7 @@ import {
   MIN_ARROW_LENGTH,
   type BodyRef,
   type Placement,
+  type RopeEnd,
 } from "./simulation";
 
 /** Forces must attach within this distance (metres) of their body's origin. */
@@ -45,6 +46,12 @@ function bodyRef(value: unknown, what: string): BodyRef {
   throw new PlacementError(`${what}.kind must be "ragdoll", "prop", "barrel" or "mine"`);
 }
 
+function ropeEnd(value: unknown, what: string): RopeEnd {
+  if (!isRecord(value)) throw new PlacementError(`${what} must be an object`);
+  const target = isRecord(value.target) && value.target.kind === "level" ? { kind: "level" as const } : bodyRef(value.target, `${what}.target`);
+  return { target, localPoint: vec3(value.localPoint, `${what}.localPoint`) };
+}
+
 /**
  * Parse untrusted JSON into placements, rebuilding each one from the known
  * fields only. Throws PlacementError if anything is malformed.
@@ -75,7 +82,8 @@ export function parsePlacements(input: unknown, maxCount: number): Placement[] {
         normal: vec3(item.normal, `${what}.normal`),
       };
     }
-    throw new PlacementError(`${what}.kind must be "force", "box", "mine" or "bait"`);
+    if (item.kind === "rope") return { kind: "rope", a: ropeEnd(item.a, `${what}.a`), b: ropeEnd(item.b, `${what}.b`) };
+    throw new PlacementError(`${what}.kind must be "force", "box", "mine", "bait" or "rope"`);
   });
 }
 
@@ -98,7 +106,7 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
   const minY = level.bounds.min.y;
   const maxY = level.bounds.max.y + MAX_HEIGHT_ABOVE_LEVEL;
   for (const p of placements) {
-    if (p.kind === "force") continue;
+    if (p.kind === "force" || p.kind === "rope") continue;
     const ids = p.kind === "box" ? propIds : p.kind === "mine" ? mineIds : baitIds;
     if (p.id <= 0 || ids.has(p.id)) throw new PlacementError(`${p.kind} id ${p.id} must be positive and unique`);
     ids.add(p.id);
@@ -109,31 +117,39 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
   }
 
-  for (const p of placements) {
-    if (p.kind !== "force") continue;
-    const { target } = p;
+  /** A force or rope end must be on something that exists, near its origin. */
+  const checkAttachment = (target: BodyRef, localPoint: readonly number[], what: string) => {
     if (target.kind === "ragdoll" && !(target.bone >= 0 && target.bone < BODY_PARTS.length)) {
       throw new PlacementError(`there is no ragdoll bone ${target.bone}`);
     }
     if (target.kind === "prop" && !propIds.has(target.id)) {
-      throw new PlacementError(`a force targets missing box ${target.id}`);
+      throw new PlacementError(`a ${what} targets missing box ${target.id}`);
     }
     if (target.kind === "mine" && !mineIds.has(target.id)) {
-      throw new PlacementError(`a force targets missing mine ${target.id}`);
+      throw new PlacementError(`a ${what} targets missing mine ${target.id}`);
     }
     if (target.kind === "barrel" && !(target.index >= 0 && target.index < barrelCount(level))) {
       throw new PlacementError(`there is no barrel ${target.index}`);
     }
-    if (new THREE.Vector3(...p.localPoint).length() > MAX_ATTACH_DISTANCE) {
-      throw new PlacementError("a force is attached too far from its body");
+    if (new THREE.Vector3(...localPoint).length() > MAX_ATTACH_DISTANCE) {
+      throw new PlacementError(`a ${what} is attached too far from its body`);
     }
+  };
+
+  for (const p of placements) {
+    if (p.kind === "rope") {
+      for (const end of [p.a, p.b]) if (end.target.kind !== "level") checkAttachment(end.target, end.localPoint, "rope");
+      continue;
+    }
+    if (p.kind !== "force") continue;
+    checkAttachment(p.target, p.localPoint, "force");
     const length = new THREE.Vector3(...p.vector).length();
     if (length < MIN_ARROW_LENGTH - LENGTH_EPSILON || length > MAX_ARROW_LENGTH + LENGTH_EPSILON) {
       throw new PlacementError("a force is too weak or too strong");
     }
   }
 
-  if (propIds.size === 0 && mineIds.size === 0 && baitIds.size === 0) return;
+  if (propIds.size === 0 && mineIds.size === 0 && baitIds.size === 0 && !placements.some((p) => p.kind === "rope")) return;
   const simulation = createSimulation(b3, level.map, placements);
   try {
     for (const p of placements) {
@@ -146,6 +162,10 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
       }
       if (p.kind === "mine") {
         const problem = simulation.mineProblem(p.position, p.normal, p.id);
+        if (problem) throw new PlacementError(problem);
+      }
+      if (p.kind === "rope") {
+        const problem = simulation.ropeProblem(p.a, p.b);
         if (problem) throw new PlacementError(problem);
       }
     }

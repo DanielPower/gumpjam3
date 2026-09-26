@@ -8,6 +8,7 @@
 "sky" "#f3b98a"
 "inventory_force" "2"
 "inventory_box" "3"
+"inventory_rope" "2"
 // brush 0
 {
 ( -240 64 16 ) ( -240 -64 16 ) ( -240 -64 -16 ) stone_dark 0 0 0 1 1

@@ -46,7 +46,16 @@ const bait = `
   <ellipse cx="18" cy="29" rx="2.4" ry="1.1" fill="#d99a1e"/>
   <ellipse cx="29" cy="24.5" rx="1.6" ry="0.8" fill="#d99a1e"/>`;
 
-const ICONS: Record<PlacementKind, string> = { force, box, mine, bait };
+const rope = `
+  <path d="M24 13 C35 13 41 17 41 22 C41 27 35 31 24 31 C13 31 7 27 7 22 C7 17 13 13 24 13 Z" fill="none" stroke="#1b1b1b" stroke-width="7"/>
+  <path d="M24 13 C35 13 41 17 41 22 C41 27 35 31 24 31 C13 31 7 27 7 22 C7 17 13 13 24 13 Z" fill="none" stroke="#c89a5a" stroke-width="4"/>
+  <path d="M24 18 C31 18 35 20 35 22.5 C35 25 31 27 24 27 C17 27 13 25 13 22.5 C13 20 17 18 24 18 Z" fill="none" stroke="#1b1b1b" stroke-width="7"/>
+  <path d="M24 18 C31 18 35 20 35 22.5 C35 25 31 27 24 27 C17 27 13 25 13 22.5 C13 20 17 18 24 18 Z" fill="none" stroke="#a87a40" stroke-width="4"/>
+  <path d="M38 27 C40 33 35 37 30 39 C26 40.5 22 40 19 42" fill="none" stroke="#1b1b1b" stroke-width="7" stroke-linecap="round"/>
+  <path d="M38 27 C40 33 35 37 30 39 C26 40.5 22 40 19 42" fill="none" stroke="#c89a5a" stroke-width="4" stroke-linecap="round"/>
+  <path d="M10 20 L38 24 M12 26 L36 20" fill="none" stroke="#7a5428" stroke-width="1" opacity="0.6"/>`;
+
+const ICONS: Record<PlacementKind, string> = { force, box, mine, bait, rope };
 
 export function inventoryIcon(kind: PlacementKind) {
   const template = document.createElement("template");

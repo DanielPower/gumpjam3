@@ -50,6 +50,10 @@ export const MINE_RADIUS = 0.22;
 export const MINE_THICKNESS = 0.07;
 /** Steel-ish (kg/m³): a mine weighs about 16 kg. */
 const MINE_DENSITY = 1500;
+/** Ropes can be this long at most, and no shorter than the minimum (metres). */
+export const MAX_ROPE_LENGTH = 6;
+export const MIN_ROPE_LENGTH = 0.2;
+
 /** Mines may touch other things, but not overlap them by more than this (metres). */
 const MINE_OVERLAP_TOLERANCE = 0.01;
 export const MINE_BLAST = { radius: 3.5, speed: 16 };
@@ -113,7 +117,22 @@ export type BaitPlacement = {
   position: b3Vec3;
 };
 
-export type Placement = ForcePlacement | BoxPlacement | MinePlacement | BaitPlacement;
+/** Where a rope is tied: to a body, or to the level itself. */
+export type RopeTarget = BodyRef | { kind: "level" };
+
+export type RopeEnd = {
+  target: RopeTarget;
+  /** The point it's tied at, in the target body's local frame (the level's frame is the world). */
+  localPoint: b3Vec3;
+};
+
+/**
+ * A rope tying two things together. It's as long as its ends are apart when
+ * the run starts, and can go slack but not stretch.
+ */
+export type RopePlacement = { kind: "rope"; a: RopeEnd; b: RopeEnd };
+
+export type Placement = ForcePlacement | BoxPlacement | MinePlacement | BaitPlacement | RopePlacement;
 export type PlacementKind = Placement["kind"];
 export type Inventory = Record<PlacementKind, number>;
 
@@ -155,6 +174,12 @@ export type Simulation = {
   ratRoutes(): readonly RatRoute[];
   /** Whether a rat has reached and eaten this bait. */
   baitConsumed(id: number): boolean;
+  /** Whether `body` is the level's static geometry (not a moving part). */
+  isLevel(body: b3BodyId): boolean;
+  /** Where a rope end is in the world right now. */
+  ropeEndPoint(end: RopeEnd): b3Vec3;
+  /** Why a rope can't tie these ends together, or null if it can. */
+  ropeProblem(a: RopeEnd, b: RopeEnd): string | null;
   /** Why a mine can't go at `position` (on a surface with this normal), or null if it can. */
   mineProblem(position: b3Vec3, normal: b3Vec3, ignoreMine?: number): string | null;
   /** Why bait cannot be placed at `position`, or null if a rat can reach it. */
@@ -436,6 +461,32 @@ export function createSimulation(
     return body;
   };
 
+  const ropeBody = (target: RopeTarget) => (target.kind === "level" ? levelBody : resolve(target));
+  const ropeEndPoint = (end: RopeEnd): b3Vec3 => b3.b3Body_GetWorldPoint([0, 0, 0], ropeBody(end.target), end.localPoint);
+
+  // Ropes: distance joints that can shorten freely (a spring with no
+  // stiffness) but not lengthen past the rope's length (the limit).
+  for (const placement of placements) {
+    if (placement.kind !== "rope") continue;
+    const [a, b] = [ropeEndPoint(placement.a), ropeEndPoint(placement.b)];
+    const length = Math.max(MIN_ROPE_LENGTH, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    const def = b3.b3DefaultDistanceJointDef();
+    def.base.bodyIdA = ropeBody(placement.a.target);
+    def.base.bodyIdB = ropeBody(placement.b.target);
+    def.base.localFrameA = { position: placement.a.localPoint, quaternion: [0, 0, 0, 1] };
+    def.base.localFrameB = { position: placement.b.localPoint, quaternion: [0, 0, 0, 1] };
+    // The things it ties together still bump into each other.
+    def.base.collideConnected = true;
+    def.length = length;
+    def.enableSpring = true;
+    def.hertz = 0;
+    def.dampingRatio = 0;
+    def.enableLimit = true;
+    def.minLength = 0;
+    def.maxLength = length;
+    b3.b3CreateDistanceJoint(world, def);
+  }
+
   const applyForces = () => {
     const point: b3Vec3 = [0, 0, 0];
     for (const placement of placements) {
@@ -632,6 +683,28 @@ export function createSimulation(
     return problem;
   };
 
+  const sameTarget = (a: RopeTarget, b: RopeTarget) => JSON.stringify(a) === JSON.stringify(b);
+
+  /** Ropes tie two different things together, within reach, and to the level only at its surface. */
+  const ropeProblem = (a: RopeEnd, b: RopeEnd): string | null => {
+    if (sameTarget(a.target, b.target)) return "a rope must tie two different things together";
+    for (const end of [a, b]) {
+      if (end.target.kind !== "level") continue;
+      let onLevel = false;
+      b3.b3World_OverlapShape(world, end.localPoint, [0, 0, 0], 0.05, queryFilter, (shapeId: b3ShapeId) => {
+        if (bodyKey(b3.b3Shape_GetBody(shapeId)) !== bodyKey(levelBody)) return true;
+        onLevel = true;
+        return false;
+      });
+      if (!onLevel) return "a rope must be tied to the level at its surface";
+    }
+    const [pa, pb] = [ropeEndPoint(a), ropeEndPoint(b)];
+    const length = Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+    if (length > MAX_ROPE_LENGTH) return `a rope can be at most ${MAX_ROPE_LENGTH} m long`;
+    if (length < MIN_ROPE_LENGTH) return "a rope's ends are too close together";
+    return null;
+  };
+
   /** Bait must sit on the rats' floor, where their horizontal charge can reach it. */
   const baitProblem = (position: b3Vec3, ignoreBait?: number): string | null => {
     const ratFloors = solids.movers.flatMap((mover) => mover.motion.kind === "rat" ? [mover.pivot.y] : []);
@@ -673,6 +746,9 @@ export function createSimulation(
     baitConsumed: (id) => ratRoutes.some((route) => route.baitId === id && route.consumed),
     mineProblem,
     baitProblem,
+    isLevel: (body) => bodyKey(body) === bodyKey(levelBody),
+    ropeEndPoint,
+    ropeProblem,
     resolve,
     refForBody: (body) => refs.get(bodyKey(body)) ?? null,
     applyForces,

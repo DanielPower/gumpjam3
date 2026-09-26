@@ -28,7 +28,7 @@ const bait = (id: number, x: number, z: number): Placement => ({
 });
 
 test("Rat Race offers bait and leaves an open landing for its two charging rats", () => {
-  assert.deepEqual(level.inventory, { force: 2, box: 0, mine: 0, bait: 2 });
+  assert.deepEqual(level.inventory, { force: 2, box: 0, mine: 0, bait: 2, rope: 0 });
   const solids = levelSolids(level.map);
   assert.equal(solids.movers.filter((mover) => mover.motion.kind === "rat").length, 2);
   assert.equal(solids.movers.filter((mover) => mover.motion.kind === "rotate").length, 1);

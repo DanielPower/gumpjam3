@@ -10,12 +10,16 @@ import {
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
   MINE_SURFACE_OFFSET,
+  MIN_ROPE_LENGTH,
   TIME_STEP,
   VELOCITY_PER_METER,
   type BodyRef,
   type ForcePlacement,
   type Placement,
   type PlacementKind,
+  type RopeEnd,
+  type RopePlacement,
+  type RopeTarget,
   type Simulation,
 } from "@stairs/shared/simulation";
 import { getEntityWorldOrigin, getEntityWorldYaw } from "@stairs/shared/trenchbroom-map";
@@ -41,6 +45,7 @@ import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
 import { inventoryIcon } from "./inventory-icons";
 import { PoseInterpolator } from "./pose-interpolator";
+import { RopeView } from "./rope-view";
 import { isMuted, playBeep, playImpacts, setMuted } from "./sound-effects";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
@@ -61,8 +66,8 @@ const MAX_LOOK_AHEAD = 1;
 const HIT_FLASH_SECONDS = 0.4;
 const LEVEL_IDS = Object.keys(levelSources);
 
-const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait" };
-const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait" };
+const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait", rope: "Rope" };
+const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait", Digit5: "rope" };
 
 function disposeObject(object: THREE.Object3D) {
   object.removeFromParent();
@@ -225,6 +230,8 @@ export const Game = ({
   const explosives = new ExplosivesView(scene, b3, ({ final, position }) =>
     playBeep(final, position.clone().project(activeCamera).x),
   );
+  const ropeView = new RopeView();
+  scene.add(ropeView.object3d);
 
   const boxGeometry = new THREE.BoxGeometry(
     BOX_HALF_EXTENTS[0] * 2,
@@ -347,6 +354,63 @@ export const Game = ({
     ...ragdollMeshes,
   ];
   const interpolator = new PoseInterpolator();
+
+  // --- Ropes --------------------------------------------------------------------
+
+  /** The mesh a rope end is tied to: null for the level, undefined if it's gone. */
+  const meshOfTarget = (target: RopeTarget): THREE.Object3D | null | undefined =>
+    target.kind === "level" ? null
+    : target.kind === "ragdoll" ? ragdollMeshes[target.bone]
+    : target.kind === "prop" ? propMeshes.get(target.id)
+    : explosives.meshOf(target);
+
+  /**
+   * Where a rope end is drawn: on its object's mesh, which is smoothed between
+   * physics steps, so the rope stays tied on as it moves.
+   */
+  const ropeEndPoint = (end: RopeEnd) => {
+    const point = new THREE.Vector3(...end.localPoint);
+    const mesh = meshOfTarget(end.target);
+    if (!mesh) return point;
+    mesh.updateWorldMatrix(true, false);
+    return mesh.localToWorld(point);
+  };
+
+  const ropePlacements = () =>
+    placements.flatMap((placement, index) => (placement.kind === "rope" ? [{ placement, index }] : []));
+
+  /** A rope end on whatever the pointer is over: a body, or the level itself (not its moving parts). */
+  const ropeEndAt = (hit: NonNullable<ReturnType<typeof pick>>): RopeEnd | null => {
+    const ref = simulation.refForBody(hit.body);
+    if (ref) {
+      const localPoint: b3Vec3 = [0, 0, 0];
+      b3.b3Body_GetLocalPoint(localPoint, hit.body, hit.point.toArray());
+      return { target: ref, localPoint };
+    }
+    return simulation.isLevel(hit.body) ? { target: { kind: "level" }, localPoint: hit.point.toArray() } : null;
+  };
+
+  /** Draw every rope between where its ends are now; ones tied to something blown up are gone. */
+  const updateRopes = () => {
+    ropePlacements().forEach(({ placement, index }, i) => {
+      const gone = [placement.a, placement.b].some((end) => {
+        const mesh = meshOfTarget(end.target);
+        return mesh !== null && (!mesh || !mesh.visible);
+      });
+      ropeView.update(i, ropeEndPoint(placement.a), ropeEndPoint(placement.b), index === selected, !gone);
+    });
+  };
+
+  /** The index of the rope under the pointer, or -1. */
+  const hitRope = () => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const toScreen = (point: THREE.Vector3) => {
+      const ndc = point.clone().project(activeCamera);
+      return new THREE.Vector2(rect.left + ((ndc.x + 1) / 2) * rect.width, rect.top + ((1 - ndc.y) / 2) * rect.height);
+    };
+    const i = ropeView.hit(new THREE.Vector2(pointer.x, pointer.y), toScreen, pickPixels() * 0.75);
+    return i >= 0 ? ropePlacements()[i].index : -1;
+  };
   /** Unsimulated time (seconds) carried between frames, less than a step once caught up. */
   let stepBacklog = 0;
 
@@ -440,6 +504,14 @@ export const Game = ({
     });
     ratRouteLines.visible = !running;
 
+    // Each rope is as long as its ends are apart now, as in the simulation.
+    ropeView.setRopes(
+      ropePlacements().map(({ placement }) => {
+        const [a, b] = [simulation.ropeEndPoint(placement.a), simulation.ropeEndPoint(placement.b)];
+        return Math.max(MIN_ROPE_LENGTH, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+      }),
+    );
+
     syncVisuals();
     refreshForces();
   };
@@ -467,7 +539,12 @@ export const Game = ({
     commit(next);
   };
 
-  /** Remove a placement, along with any forces pushing on it if it's a box or mine. */
+  /** Whether a force or rope on `target` is on the box or mine `placement`. */
+  const tiedTo = (target: RopeTarget, placement: Placement) =>
+    (placement.kind === "box" && target.kind === "prop" && target.id === placement.id) ||
+    (placement.kind === "mine" && target.kind === "mine" && target.id === placement.id);
+
+  /** Remove a placement, along with any forces or ropes on it if it's a box or mine. */
   const removePlacement = (index: number) => {
     const removed = placements[index];
     selected = null;
@@ -476,7 +553,8 @@ export const Game = ({
         (p, i) =>
           i !== index &&
           !(removed.kind === "box" && p.kind === "force" && p.target.kind === "prop" && p.target.id === removed.id) &&
-          !(removed.kind === "mine" && p.kind === "force" && p.target.kind === "mine" && p.target.id === removed.id),
+          !(removed.kind === "mine" && p.kind === "force" && p.target.kind === "mine" && p.target.id === removed.id) &&
+          !(p.kind === "rope" && [p.a, p.b].some((end) => tiedTo(end.target, removed))),
       ),
     );
   };
@@ -572,6 +650,7 @@ export const Game = ({
 
   /** The placements as they'd be if the drag in progress were committed now. */
   const draft = (): Placement[] => {
+    if (drag?.kind === "rope") return drag.b && !drag.problem ? [...placements, { kind: "rope", a: drag.a, b: drag.b }] : placements;
     if (drag?.kind === "place") {
       if (!drag.moving || !drag.valid) return placements;
       const next = [...placements];
@@ -601,7 +680,7 @@ export const Game = ({
     forces.forEach(({ placement, index }, i) => {
       arrows[i].set(worldPointOf(placement.target, placement.localPoint), new THREE.Vector3(...placement.vector));
       if (iso) arrows[i].setView(iso.metresPerPixel, iso.camera);
-      arrows[i].setState({ selected: index === selected || (drag !== null && drag.kind !== "place" && (drag.index ?? placements.length) === index) });
+      arrows[i].setState({ selected: index === selected || ((drag?.kind === "aim" || drag?.kind === "move") && (drag.index ?? placements.length) === index) });
       arrowIndices.push(index);
     });
     forceArrows.visible = !running;
@@ -703,6 +782,10 @@ export const Game = ({
       return hints[drag.mode];
     }
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
+    if (drag?.kind === "rope") {
+      const problem = drag.problem && drag.problem[0].toUpperCase() + drag.problem.slice(1);
+      return problem ?? "Let go to tie the rope here";
+    }
     if (drag?.kind === "place" && drag.moving) {
       const thing = TOOL_LABELS[drag.candidate.kind].toLowerCase();
       return drag.valid ? `Drag to move the ${thing}` : `The ${thing} can't go here · let go to put it back`;
@@ -713,8 +796,10 @@ export const Game = ({
     }
     if (current?.kind === "box") return "Drag the box to move it";
     if (current?.kind === "mine") return "Drag the mine to move it";
+    if (current?.kind === "rope") return "Rope selected";
     if (current?.kind === "bait") return "Drag the bait to move it · the rat charges along this line when the body approaches";
     if (tool === "force") return "Drag out from a body part to add a force";
+    if (tool === "rope") return "Drag from one thing to another to tie them together · boxes, mines, barrels, the body, or the level";
     if (tool === "box") return `${tap} a surface to place a box`;
     if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
@@ -839,13 +924,15 @@ export const Game = ({
     // `mode`: which part of the force the drag changes (see AimMode).
     | { kind: "aim"; index: number | null; target: BodyRef; localPoint: b3Vec3; aim: Aim; mode: AimMode }
     | { kind: "move"; index: number; target: BodyRef; localPoint: b3Vec3; vector: b3Vec3 }
-    | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean };
-  type MovablePlacement = Exclude<Placement, ForcePlacement>;
+    | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean }
+    // Tying a rope from `a` to wherever the pointer is (`b`), if it can go there.
+    | { kind: "rope"; a: RopeEnd; b: RopeEnd | null; problem: string | null };
+  type MovablePlacement = Exclude<Placement, ForcePlacement | RopePlacement>;
   let drag: Drag | null = null;
 
   const aimVector = (aim: Aim) => (modifiers.alt ? aim.raw.clone() : snapAim(aim.raw, forwardYaw));
 
-  function dragPlacement(d: Exclude<Drag, { kind: "place" }>): ForcePlacement | null {
+  function dragPlacement(d: Extract<Drag, { kind: "aim" | "move" }>): ForcePlacement | null {
     if (d.kind === "move") return { kind: "force", target: d.target, localPoint: d.localPoint, vector: d.vector };
     const vector = aimVector(d.aim);
     if (vector.length() < MIN_ARROW_LENGTH) return null;
@@ -930,10 +1017,37 @@ export const Game = ({
     baitPreviewMaterial.color.set(0xff4040);
   }
 
+  /** Stretch the rope being tied to whatever is under the pointer. */
+  function updateRopeDrag(d: Extract<Drag, { kind: "rope" }>) {
+    const hit = pick();
+    const end = hit && ropeEndAt(hit);
+    if (end) {
+      d.b = end;
+      d.problem = simulation.ropeProblem(d.a, end);
+    } else {
+      d.b = null;
+      d.problem = "a rope must be tied to something";
+    }
+    const from = ropeEndPoint(d.a);
+    const to = d.b ? ropeEndPoint(d.b) : null;
+    ropeView.showPreview(from, to, d.problem === null);
+    if (to) {
+      aimLabel.textContent = `${from.distanceTo(to).toFixed(1)} m`;
+      const offset = 1.125 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+      aimLabel.style.left = `${pointer.x + offset}px`;
+      aimLabel.style.top = `${pointer.y + offset}px`;
+      aimLabel.style.display = "block";
+    } else {
+      aimLabel.style.display = "none";
+    }
+  }
+
   function updateDrag() {
     if (!drag) return;
     if (drag.kind === "place") {
       updatePlaceDrag(drag);
+    } else if (drag.kind === "rope") {
+      updateRopeDrag(drag);
     } else if (drag.kind === "aim") {
       drag.aim.update(raycaster.ray, drag.mode, activeCamera);
       const vector = aimVector(drag.aim);
@@ -959,6 +1073,15 @@ export const Game = ({
 
   const finishDrag = () => {
     const d = drag!;
+    if (d.kind === "rope") {
+      drag = null;
+      renderer.domElement.style.cursor = "";
+      aimLabel.style.display = "none";
+      ropeView.showPreview(null, null, false);
+      if (d.b && !d.problem) addPlacement({ kind: "rope", a: d.a, b: d.b });
+      else refreshForces();
+      return;
+    }
     if (d.kind === "place") {
       drag = null;
       renderer.domElement.style.cursor = "";
@@ -985,6 +1108,7 @@ export const Game = ({
     renderer.domElement.style.cursor = "";
     aimLabel.style.display = "none";
     hidePlaceGhosts();
+    ropeView.showPreview(null, null, false);
     if (wasMovingObject) rebuild();
     else refreshForces();
   }
@@ -1047,6 +1171,16 @@ export const Game = ({
         return;
       }
 
+      if (tool === "rope") {
+        const hit = pick();
+        const a = hit && ropeEndAt(hit);
+        if (!a) return;
+        pointerDownHandled = true;
+        event.stopPropagation();
+        startDrag({ kind: "rope", a, b: null, problem: "a rope must be tied to something" });
+        return;
+      }
+
       if (tool !== "force") return;
       const hit = pick();
       const target = hit && simulation.refForBody(hit.body);
@@ -1077,7 +1211,10 @@ export const Game = ({
     else if (tool === "force") {
       const hit = pick();
       if (hit && simulation.refForBody(hit.body)) cursor = "crosshair";
-    }
+    } else if (tool === "rope") {
+      const hit = pick();
+      if (hit && ropeEndAt(hit)) cursor = "crosshair";
+    } else if (tool === null && hitRope() >= 0) cursor = "pointer";
     renderer.domElement.style.cursor = cursor;
 
     if (tool === "mine") {
@@ -1152,6 +1289,12 @@ export const Game = ({
       return;
     }
 
+    // Ropes are thin, so they're picked by how close they're drawn to the pointer.
+    const ropeIndex = hitRope();
+    if (ropeIndex >= 0) {
+      select(ropeIndex);
+      return;
+    }
     // Bait has no physics body, so select its rendered mesh before physics picking.
     const baitId = hitBait();
     if (baitId !== null) {
@@ -1331,6 +1474,7 @@ export const Game = ({
     updateFlashes(Math.min(dt, 100) / 1000);
     explosives.update(Math.min(dt, 100) / 1000);
 
+    updateRopes();
     renderer.render(scene, activeCamera);
     debugElement.innerText = debugInfo({ dt });
     const hintText = hint();

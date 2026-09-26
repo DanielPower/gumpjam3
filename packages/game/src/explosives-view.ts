@@ -166,6 +166,11 @@ export class ExplosivesView {
     }
   }
 
+  /** The mesh drawing a mine or barrel, if it's there. */
+  meshOf(source: { kind: "mine"; id: number } | { kind: "barrel"; index: number }): THREE.Object3D | undefined {
+    return source.kind === "mine" ? this.mines.get(source.id) : this.barrels[source.index];
+  }
+
   /** The mines' meshes, which move with their bodies. */
   get mineMeshes(): readonly THREE.Object3D[] {
     return [...this.mines.values()];

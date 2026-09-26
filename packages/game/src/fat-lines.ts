@@ -65,3 +65,17 @@ export function setSegment(line: LineSegments2, a: THREE.Vector3, b: THREE.Vecto
     distance.data.needsUpdate = true;
   }
 }
+
+/**
+ * Move the points of a line made with `fatLines(strip(points))`, in place.
+ * There must be as many points as it was made with.
+ */
+export function setStrip(line: LineSegments2, points: readonly THREE.Vector3[]) {
+  const start = line.geometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute;
+  const array = start.data.array as Float32Array;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [a, b] = [points[i], points[i + 1]];
+    array.set([a.x, a.y, a.z, b.x, b.y, b.z], i * 6);
+  }
+  start.data.needsUpdate = true;
+}
