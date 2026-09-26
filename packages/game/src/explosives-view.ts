@@ -4,6 +4,9 @@ import {
   BARREL_HEIGHT,
   BARREL_RADIUS,
   MINE_BLAST,
+  MINE_FUSE_SECONDS,
+  MINE_RADIUS,
+  MINE_THICKNESS,
   type Explosion,
   type MinePlacement,
   type Placement,
@@ -11,13 +14,26 @@ import {
 } from "@stairs/shared/simulation";
 import { syncObjectToBody } from "./box3d-three";
 
-const MINE_RADIUS = 0.22;
-const MINE_THICKNESS = 0.07;
 const EXPLOSION_SECONDS = 0.6;
+/** An armed mine beeps (and blinks) this often, then once more, higher, just before it goes off. */
+const BEEP_INTERVAL = 0.2;
+const FINAL_BEEP_BEFORE = 0.08;
+const BLINK_SECONDS = 0.08;
+
+/** When an armed mine beeps: seconds after arming, and whether it's the last, higher beep. */
+const BEEPS: readonly { at: number; final: boolean }[] = (() => {
+  const beeps: { at: number; final: boolean }[] = [];
+  for (let at = 0; at < MINE_FUSE_SECONDS - FINAL_BEEP_BEFORE - BEEP_INTERVAL / 2; at += BEEP_INTERVAL) beeps.push({ at, final: false });
+  beeps.push({ at: Math.max(0, MINE_FUSE_SECONDS - FINAL_BEEP_BEFORE), final: true });
+  return beeps;
+})();
+
+export type MineBeep = { final: boolean; position: THREE.Vector3 };
 const UP = new THREE.Vector3(0, 1, 0);
 
 const mineBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.6, metalness: 0.4 });
 const mineLightMaterial = new THREE.MeshStandardMaterial({ color: 0xff3020, emissive: 0xff2010, emissiveIntensity: 1.5 });
+const armedLightMaterial = new THREE.MeshBasicMaterial({ color: 0xffd0c0 });
 const selectedMineMaterial = new THREE.MeshStandardMaterial({ color: 0x6a7078, emissive: 0x806030, roughness: 0.6 });
 const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0xc8322a, roughness: 0.55, metalness: 0.2 });
 const bandMaterial = new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.5 });
@@ -31,11 +47,11 @@ const lidGeometry = new THREE.CylinderGeometry(BARREL_RADIUS * 0.95, BARREL_RADI
 
 function mineMesh(material: THREE.Material = mineBodyMaterial) {
   const group = new THREE.Group();
+  // Centred on the mine's body, lying in its local XZ plane.
   const body = new THREE.Mesh(mineGeometry, material);
-  body.position.y = MINE_THICKNESS / 2 - 0.04;
   body.castShadow = body.receiveShadow = true;
   const light = new THREE.Mesh(mineLightGeometry, mineLightMaterial);
-  light.position.y = MINE_THICKNESS - 0.03;
+  light.position.y = MINE_THICKNESS / 2 + 0.005;
   group.add(body, light);
   return group;
 }
@@ -71,15 +87,19 @@ export class ExplosivesView {
   private readonly scene: THREE.Scene;
   private readonly b3: Box3DModule;
   private readonly mines = new Map<number, THREE.Group>();
+  /** How long each armed mine had been armed at the last sync, for spotting beeps. */
+  private readonly armedFor = new Map<number, number>();
+  private readonly onBeep: (beep: MineBeep) => void;
   private barrels: THREE.Group[] = [];
   private readonly effects: Effect[] = [];
   private readonly preview: THREE.Group;
   private readonly previewRadius: THREE.Mesh;
   private readonly previewMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false });
 
-  constructor(scene: THREE.Scene, b3: Box3DModule) {
+  constructor(scene: THREE.Scene, b3: Box3DModule, onBeep: (beep: MineBeep) => void = () => {}) {
     this.scene = scene;
     this.b3 = b3;
+    this.onBeep = onBeep;
     this.preview = mineMesh(this.previewMaterial);
     // The blast radius, drawn as a faint sphere so players can plan chains.
     this.previewRadius = new THREE.Mesh(
@@ -95,6 +115,7 @@ export class ExplosivesView {
   rebuild(simulation: Simulation, placements: readonly Placement[]) {
     for (const mesh of this.mines.values()) mesh.removeFromParent();
     this.mines.clear();
+    this.armedFor.clear();
     for (const placement of placements) {
       if (placement.kind !== "mine") continue;
       const mesh = mineMesh();
@@ -113,14 +134,41 @@ export class ExplosivesView {
     this.sync(simulation);
   }
 
-  /** Follow the barrels' bodies, and hide anything that has gone off. */
+  /**
+   * Follow the barrels' and mines' bodies, and hide anything that has gone
+   * off. Armed mines blink, and beep through `onBeep`.
+   */
   sync(simulation: Simulation) {
     this.barrels.forEach((mesh, index) => {
       const gone = simulation.detonated({ kind: "barrel", index });
       mesh.visible = !gone;
       if (!gone) syncObjectToBody(this.b3, simulation.barrels[index], mesh);
     });
-    for (const [id, mesh] of this.mines) mesh.visible = !simulation.detonated({ kind: "mine", id });
+    for (const [id, mesh] of this.mines) {
+      const gone = simulation.detonated({ kind: "mine", id });
+      mesh.visible = !gone;
+      if (gone) continue;
+      syncObjectToBody(this.b3, simulation.mines.get(id)!, mesh);
+      const fuse = simulation.mineFuse(id);
+      const light = mesh.children[1] as THREE.Mesh;
+      if (fuse === null) {
+        light.material = mineLightMaterial;
+        continue;
+      }
+      const armedFor = MINE_FUSE_SECONDS - fuse;
+      const before = this.armedFor.get(id) ?? -1;
+      this.armedFor.set(id, armedFor);
+      for (const beep of BEEPS) {
+        if (before < beep.at && beep.at <= armedFor) this.onBeep({ final: beep.final, position: mesh.position.clone() });
+      }
+      const lastBeep = [...BEEPS].reverse().find((beep) => beep.at <= armedFor);
+      light.material = lastBeep && armedFor - lastBeep.at < BLINK_SECONDS ? armedLightMaterial : mineLightMaterial;
+    }
+  }
+
+  /** The mines' meshes, which move with their bodies. */
+  get mineMeshes(): readonly THREE.Object3D[] {
+    return [...this.mines.values()];
   }
 
   /** The barrels' meshes, which move with their bodies. */

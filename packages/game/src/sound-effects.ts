@@ -1,7 +1,9 @@
 import { HIT_SPEED_THRESHOLD } from "@stairs/shared/simulation";
 
 /**
- * Impact sounds, synthesised with Web Audio rather than recorded, so every hit
+ * Sound effects, synthesised with Web Audio rather than recorded.
+ *
+ * Impacts are made to order, so every hit
  * can follow how hard it was and what took it:
  * - the head (and neck) knock: a slightly higher, hollower thump;
  * - the torso thuds: a deep, heavy body blow;
@@ -88,6 +90,31 @@ export function playImpacts<Hit extends ImpactHit>(hits: readonly Hit[], pan: (h
     const intensity = Math.min(1, Math.max(0, (hit.speed - HIT_SPEED_THRESHOLD) / SPEED_FOR_LOUDEST));
     impact(context, output, noise, KIND_OF_BONE[hit.bone] ?? "limb", intensity, Math.max(-1, Math.min(1, pan(hit))));
   }
+}
+
+/**
+ * An armed mine's beep: a short electronic blip, or for the `final` one just
+ * before it goes off, a higher, longer one. `pan` is its place left to right (-1 to 1).
+ */
+export function playBeep(final: boolean, pan = 0) {
+  if (!context || !output || muted || context.state !== "running") return;
+  const t = context.currentTime;
+  const [frequency, length] = final ? [2100, 0.14] : [1300, 0.07];
+  const oscillator = new OscillatorNode(context, { type: "square", frequency });
+  // Take the edge off the square wave, so it beeps rather than buzzes.
+  const filter = new BiquadFilterNode(context, { type: "lowpass", frequency: frequency * 2.5 });
+  const gain = new GainNode(context, { gain: 0 });
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.18, t + 0.005);
+  gain.gain.setValueAtTime(0.18, t + length - 0.015);
+  gain.gain.linearRampToValueAtTime(0, t + length);
+  oscillator
+    .connect(filter)
+    .connect(gain)
+    .connect(new StereoPannerNode(context, { pan: Math.max(-1, Math.min(1, pan)) * 0.7 }))
+    .connect(output);
+  oscillator.start(t);
+  oscillator.stop(t + length + 0.02);
 }
 
 /** A little variety, so repeated hits don't sound mechanical. */

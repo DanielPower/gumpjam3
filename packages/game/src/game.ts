@@ -41,7 +41,7 @@ import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
 import { inventoryIcon } from "./inventory-icons";
 import { PoseInterpolator } from "./pose-interpolator";
-import { isMuted, playImpacts, setMuted } from "./impact-sounds";
+import { isMuted, playBeep, playImpacts, setMuted } from "./sound-effects";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
@@ -222,7 +222,9 @@ export const Game = ({
   const ratRouteLines = new THREE.Group();
   ratRouteLines.name = "Rat charge routes";
   scene.add(ratRouteLines);
-  const explosives = new ExplosivesView(scene, b3);
+  const explosives = new ExplosivesView(scene, b3, ({ final, position }) =>
+    playBeep(final, position.clone().project(activeCamera).x),
+  );
 
   const boxGeometry = new THREE.BoxGeometry(
     BOX_HALF_EXTENTS[0] * 2,
@@ -341,6 +343,7 @@ export const Game = ({
     ...levelObjects.movers,
     ...propMeshes.values(),
     ...explosives.barrelMeshes,
+    ...explosives.mineMeshes,
     ...ragdollMeshes,
   ];
   const interpolator = new PoseInterpolator();
@@ -464,7 +467,7 @@ export const Game = ({
     commit(next);
   };
 
-  /** Remove a placement, along with any forces pushing on it if it's a prop. */
+  /** Remove a placement, along with any forces pushing on it if it's a box or mine. */
   const removePlacement = (index: number) => {
     const removed = placements[index];
     selected = null;
@@ -472,7 +475,8 @@ export const Game = ({
       placements.filter(
         (p, i) =>
           i !== index &&
-          !(removed.kind === "box" && p.kind === "force" && p.target.kind === "prop" && p.target.id === removed.id),
+          !(removed.kind === "box" && p.kind === "force" && p.target.kind === "prop" && p.target.id === removed.id) &&
+          !(removed.kind === "mine" && p.kind === "force" && p.target.kind === "mine" && p.target.id === removed.id),
       ),
     );
   };
@@ -702,7 +706,7 @@ export const Game = ({
     if (current?.kind === "bait") return "The rat charges along this line when the body approaches";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return `${tap} a surface to place a box`;
-    if (tool === "mine") return `${tap} a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives`;
+    if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
     return touch
       ? "Choose an item to set up the run · tap a placed item to select it · drag to pan · pinch to zoom · twist two fingers to rotate"

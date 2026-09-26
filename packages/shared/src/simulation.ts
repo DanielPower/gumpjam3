@@ -32,14 +32,26 @@ export const HIT_SPEED_THRESHOLD = 1.5;
 
 /*
  * Explosives: mines the player places, and barrels placed in the map
- * ("prop_barrel", origin at the centre of its base). A mine goes off when
- * anything moving touches it; a barrel when it's hit hard. Either one caught in
- * another's blast goes off a moment later, so they chain. A blast kicks every
- * moving body within its radius outwards (and a little upwards), hardest at the
- * centre; each ragdoll part it catches takes a hit as if it struck something at
- * that speed.
+ * ("prop_barrel", origin at the centre of its base).
+ * - A mine is a loose physics object, like a box, that can be pushed and
+ *   thrown. It arms when the ragdoll comes close, then goes off when its fuse
+ *   runs out. Bumps and blasts don't set it off.
+ * - A barrel goes off when it's hit hard, or a moment after being caught in
+ *   another blast, so they chain.
+ * A blast kicks every moving body within its radius outwards (and a little
+ * upwards), hardest at the centre; each ragdoll part it catches takes a hit as
+ * if it struck something at that speed.
  */
-export const MINE_TRIGGER_RADIUS = 0.3;
+/** A mine arms when any part of the ragdoll comes within this distance (metres) of its centre. */
+export const MINE_ARM_RADIUS = 0.6;
+/** How long an armed mine takes to go off. */
+export const MINE_FUSE_SECONDS = 1;
+export const MINE_RADIUS = 0.22;
+export const MINE_THICKNESS = 0.07;
+/** Steel-ish (kg/m³): a mine weighs about 16 kg. */
+const MINE_DENSITY = 1500;
+/** Mines may touch other things, but not overlap them by more than this (metres). */
+const MINE_OVERLAP_TOLERANCE = 0.01;
 export const MINE_BLAST = { radius: 3.5, speed: 16 };
 export const BARREL_BLAST = { radius: 4.5, speed: 18 };
 export const BARREL_RADIUS = 0.3;
@@ -56,14 +68,18 @@ const BLAST_LIFT = 0.5;
  */
 const BLAST_HIT_FRACTION = 0.6;
 const BARREL_DENSITY = 0.4;
-/** Mines sit this far off the surface they're placed on. */
+/**
+ * A mine's centre sits this far off the surface it's placed on: just over half
+ * its thickness, so it starts resting on the surface, not in it.
+ */
 export const MINE_SURFACE_OFFSET = 0.04;
 
 /** Identifies a dynamic body in a way that survives rebuilding the world. */
 export type BodyRef =
   | { kind: "ragdoll"; bone: number }
   | { kind: "prop"; id: number }
-  | { kind: "barrel"; index: number };
+  | { kind: "barrel"; index: number }
+  | { kind: "mine"; id: number };
 
 export type ForcePlacement = {
   kind: "force";
@@ -84,9 +100,9 @@ export type BoxPlacement = {
 export type MinePlacement = {
   kind: "mine";
   id: number;
-  /** Where the mine sits, just off the surface. */
+  /** Where the mine's centre starts, just off the surface. */
   position: b3Vec3;
-  /** The surface's normal, for drawing it flat against the surface. */
+  /** The surface's normal: the mine starts lying flat against the surface. */
   normal: b3Vec3;
 };
 
@@ -127,6 +143,10 @@ export type Simulation = {
   props: Map<number, b3BodyId>;
   /** Barrel bodies, by their order in the map. Destroyed when they go off. */
   barrels: b3BodyId[];
+  /** Mine bodies keyed by their placement's id. Destroyed when they go off. */
+  mines: Map<number, b3BodyId>;
+  /** Seconds left on an armed mine's fuse, or null if it isn't armed (or has gone off). */
+  mineFuse(id: number): number | null;
   /** Explosives that have gone off so far. */
   detonated(source: ExplosiveRef): boolean;
   /** Explosions during the last step. */
@@ -378,8 +398,40 @@ export function createSimulation(
     barrels.push(body);
   }
 
+  // Mines, lying flat on the surfaces they were placed on.
+  const mines = new Map<number, b3BodyId>();
+  const mineHull = (() => {
+    const points: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const a = (2 * Math.PI * i) / 12;
+      for (const y of [-MINE_THICKNESS / 2, MINE_THICKNESS / 2]) points.push(MINE_RADIUS * Math.cos(a), y, MINE_RADIUS * Math.sin(a));
+    }
+    return points;
+  })();
+  for (const placement of placements) {
+    if (placement.kind !== "mine") continue;
+    const bodyDef = b3.b3DefaultBodyDef();
+    bodyDef.type = b3.b3BodyType.b3_dynamicBody;
+    bodyDef.position = placement.position;
+    const up = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...placement.normal).normalize());
+    bodyDef.rotation = [up.x, up.y, up.z, up.w];
+    const body = b3.b3CreateBody(world, bodyDef);
+    const shapeDef = b3.b3DefaultShapeDef();
+    shapeDef.density = MINE_DENSITY;
+    const hull = b3.b3CreateHull(mineHull);
+    if (hull === null) throw new Error("Box3D could not create a mine hull");
+    b3.b3CreateHullShape(body, shapeDef, hull);
+    hull.delete();
+    mines.set(placement.id, body);
+    refs.set(bodyKey(body), { kind: "mine", id: placement.id });
+  }
+
   const resolve = (ref: BodyRef): b3BodyId => {
-    const body = ref.kind === "ragdoll" ? ragdoll[ref.bone] : ref.kind === "prop" ? props.get(ref.id) : barrels[ref.index];
+    const body =
+      ref.kind === "ragdoll" ? ragdoll[ref.bone]
+      : ref.kind === "prop" ? props.get(ref.id)
+      : ref.kind === "mine" ? mines.get(ref.id)
+      : barrels[ref.index];
     if (!body) throw new Error(`No body for ${JSON.stringify(ref)}`);
     return body;
   };
@@ -418,7 +470,9 @@ export function createSimulation(
   let lastExplosions: Explosion[] = [];
 
   // Explosives: which have gone off, and which are due to (at a later step).
-  const mines = placements.filter((p): p is MinePlacement => p.kind === "mine");
+  const fuseSteps = Math.round(MINE_FUSE_SECONDS / TIME_STEP);
+  /** The step each armed mine armed at. */
+  const armedAt = new Map<number, number>();
   const detonatedMines = new Set<number>();
   const detonatedBarrels = new Set<number>();
   const pending: { source: ExplosiveRef; step: number }[] = [];
@@ -431,24 +485,25 @@ export function createSimulation(
   };
 
   const explosivePosition = (source: ExplosiveRef): b3Vec3 =>
-    source.kind === "mine"
-      ? mines.find((m) => m.id === source.id)!.position
-      : b3.b3Body_GetWorldCenterOfMass([0, 0, 0], barrels[source.index]);
+    b3.b3Body_GetWorldCenterOfMass([0, 0, 0], source.kind === "mine" ? mines.get(source.id)! : barrels[source.index]);
 
-  /** Everything a blast can move: ragdoll parts, boxes, and barrels still in one piece. */
+  /** Everything a blast can move: ragdoll parts, boxes, and barrels and mines still in one piece. */
   const movingBodies = (): [b3BodyId, BodyRef][] => [
     ...ragdoll.map((body, bone): [b3BodyId, BodyRef] => [body, { kind: "ragdoll", bone }]),
     ...[...props].map(([id, body]): [b3BodyId, BodyRef] => [body, { kind: "prop", id }]),
     ...barrels.flatMap((body, index): [b3BodyId, BodyRef][] =>
       detonatedBarrels.has(index) ? [] : [[body, { kind: "barrel", index }]],
     ),
+    ...[...mines].flatMap(([id, body]): [b3BodyId, BodyRef][] => (detonatedMines.has(id) ? [] : [[body, { kind: "mine", id }]])),
   ];
 
   const detonate = (source: ExplosiveRef) => {
     const center = explosivePosition(source);
     const { radius, speed } = source.kind === "mine" ? MINE_BLAST : BARREL_BLAST;
-    if (source.kind === "mine") detonatedMines.add(source.id);
-    else {
+    if (source.kind === "mine") {
+      detonatedMines.add(source.id);
+      b3.b3DestroyBody(mines.get(source.id)!);
+    } else {
       detonatedBarrels.add(source.index);
       b3.b3DestroyBody(barrels[source.index]);
     }
@@ -469,13 +524,7 @@ export function createSimulation(
       const hitSpeed = kick * BLAST_HIT_FRACTION;
       if (ref.kind === "ragdoll" && hitSpeed > HIT_SPEED_THRESHOLD) lastHits.push({ bone: ref.bone, speed: hitSpeed, point: [...com] });
     }
-    // Set off other explosives within the blast, after a short delay.
-    for (const mine of mines) {
-      const [x, y, z] = mine.position;
-      if (Math.hypot(x - center[0], y - center[1], z - center[2]) < radius) {
-        schedule({ kind: "mine", id: mine.id }, stepCount + CHAIN_DELAY_STEPS);
-      }
-    }
+    // Set off barrels within the blast, after a short delay. (Mines just get thrown.)
     barrels.forEach((body, index) => {
       if (detonatedBarrels.has(index)) return;
       b3.b3Body_GetWorldCenterOfMass(com, body);
@@ -485,11 +534,11 @@ export function createSimulation(
     });
   };
 
-  /** True if any moving body is within `radius` of `position`. */
-  const touched = (position: b3Vec3, radius: number) => {
+  /** True if any part of the ragdoll is within `radius` of `position`. */
+  const ragdollNear = (position: b3Vec3, radius: number) => {
     let found = false;
     b3.b3World_OverlapShape(world, position, [0, 0, 0], radius, queryFilter, (shapeId: b3ShapeId) => {
-      if (!refs.has(bodyKey(b3.b3Shape_GetBody(shapeId)))) return true;
+      if (refs.get(bodyKey(b3.b3Shape_GetBody(shapeId)))?.kind !== "ragdoll") return true;
       found = true;
       return false;
     });
@@ -515,11 +564,17 @@ export function createSimulation(
       if (!bone || other?.kind === "ragdoll") continue;
       lastHits.push({ bone: bone.bone, speed: hitEvent.approachSpeed, point: [...hitEvent.point] });
     }
-    if (mines.length === 0 && barrels.length === 0) return;
+    if (mines.size === 0 && barrels.length === 0) return;
 
-    for (const mine of mines) {
-      if (!detonatedMines.has(mine.id) && touched(mine.position, MINE_TRIGGER_RADIUS)) {
-        schedule({ kind: "mine", id: mine.id }, stepCount);
+    // Mines arm when the ragdoll comes close, and go off when their fuse runs out.
+    const com: b3Vec3 = [0, 0, 0];
+    for (const [id, body] of mines) {
+      if (detonatedMines.has(id)) continue;
+      const armed = armedAt.get(id);
+      if (armed === undefined) {
+        if (ragdollNear(b3.b3Body_GetWorldCenterOfMass(com, body), MINE_ARM_RADIUS)) armedAt.set(id, stepCount);
+      } else if (stepCount - armed >= fuseSteps) {
+        schedule({ kind: "mine", id }, stepCount);
       }
     }
     // Go off in the order they were set off; blasts can schedule more.
@@ -533,30 +588,48 @@ export function createSimulation(
     }
   };
 
-  /** Mines must sit on the level's surface: not floating, and not buried in it. */
+  /**
+   * Mines must rest on something (the level, or any other object), without
+   * floating or overlapping anything. `ignoreMine` is the mine being checked,
+   * if it's already in the world.
+   */
   const mineProblem = (position: b3Vec3, normal: b3Vec3, ignoreMine?: number): string | null => {
     const length = Math.hypot(...normal);
     if (Math.abs(length - 1) > 1e-3) return "a mine's normal must be a unit vector";
-    const along = (d: number): b3Vec3 => [position[0] + normal[0] * d, position[1] + normal[1] * d, position[2] + normal[2] * d];
-    const onLevel = (point: b3Vec3, radius: number) => {
-      let found = false;
-      b3.b3World_OverlapShape(world, point, [0, 0, 0], radius, queryFilter, (shapeId: b3ShapeId) => {
-        if (bodyKey(b3.b3Shape_GetBody(shapeId)) !== bodyKey(levelBody)) return true;
-        found = true;
-        return false;
-      });
-      return found;
+    const isSelf = (shapeId: b3ShapeId) => {
+      const ref = refs.get(bodyKey(b3.b3Shape_GetBody(shapeId)));
+      return ref?.kind === "mine" && ref.id === ignoreMine;
     };
-    if (!onLevel(position, MINE_SURFACE_OFFSET + 0.02)) return "a mine must be placed on a surface";
-    if (onLevel(along(0.12), 0.05)) return "a mine can't be buried in the level";
-    for (const other of mines) {
-      if (other.id === ignoreMine) continue;
-      const [x, y, z] = other.position;
-      if (Math.hypot(x - position[0], y - position[1], z - position[2]) < 2 * MINE_TRIGGER_RADIUS) {
-        return "mines can't be placed on top of each other";
-      }
+
+    let resting = false;
+    b3.b3World_OverlapShape(world, position, [0, 0, 0], MINE_SURFACE_OFFSET + 0.02, queryFilter, (shapeId: b3ShapeId) => {
+      if (isSelf(shapeId)) return true;
+      resting = true;
+      return false;
+    });
+    if (!resting) return "a mine must be placed on a surface";
+
+    // The mine's shape, turned to lie flat on the surface and shrunk a little
+    // so resting on something doesn't count as overlapping it.
+    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...normal));
+    const shape: number[] = [];
+    for (let i = 0; i < mineHull.length; i += 3) {
+      const corner = new THREE.Vector3(mineHull[i], mineHull[i + 1], mineHull[i + 2]);
+      corner.set(corner.x * (1 - MINE_OVERLAP_TOLERANCE / MINE_RADIUS), corner.y - Math.sign(corner.y) * MINE_OVERLAP_TOLERANCE, corner.z * (1 - MINE_OVERLAP_TOLERANCE / MINE_RADIUS));
+      shape.push(...corner.applyQuaternion(turn).toArray());
     }
-    return null;
+    let problem: string | null = null;
+    b3.b3World_OverlapShape(world, position, shape, 0, queryFilter, (shapeId: b3ShapeId) => {
+      if (isSelf(shapeId)) return true;
+      const body = b3.b3Shape_GetBody(shapeId);
+      const ref = refs.get(bodyKey(body));
+      problem =
+        bodyKey(body) === bodyKey(levelBody) ? "a mine can't be buried in the level"
+        : ref?.kind === "mine" ? "mines can't be placed on top of each other"
+        : "a mine can't overlap something else";
+      return false;
+    });
+    return problem;
   };
 
   /** Bait must sit on the rats' floor, where their horizontal charge can reach it. */
@@ -588,6 +661,12 @@ export function createSimulation(
     movers,
     props,
     barrels,
+    mines,
+    mineFuse: (id) => {
+      const armed = armedAt.get(id);
+      if (armed === undefined || detonatedMines.has(id)) return null;
+      return Math.max(0, (fuseSteps - (stepCount - armed)) * TIME_STEP);
+    },
     detonated: isDetonated,
     explosions: () => lastExplosions,
     ratRoutes: () => ratRoutes,

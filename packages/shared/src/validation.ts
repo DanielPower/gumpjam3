@@ -41,7 +41,8 @@ function bodyRef(value: unknown, what: string): BodyRef {
   if (value.kind === "ragdoll") return { kind: "ragdoll", bone: integer(value.bone, `${what}.bone`) };
   if (value.kind === "prop") return { kind: "prop", id: integer(value.id, `${what}.id`) };
   if (value.kind === "barrel") return { kind: "barrel", index: integer(value.index, `${what}.index`) };
-  throw new PlacementError(`${what}.kind must be "ragdoll", "prop" or "barrel"`);
+  if (value.kind === "mine") return { kind: "mine", id: integer(value.id, `${what}.id`) };
+  throw new PlacementError(`${what}.kind must be "ragdoll", "prop", "barrel" or "mine"`);
 }
 
 /**
@@ -116,6 +117,9 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
     if (target.kind === "prop" && !propIds.has(target.id)) {
       throw new PlacementError(`a force targets missing box ${target.id}`);
+    }
+    if (target.kind === "mine" && !mineIds.has(target.id)) {
+      throw new PlacementError(`a force targets missing mine ${target.id}`);
     }
     if (target.kind === "barrel" && !(target.index >= 0 && target.index < barrelCount(level))) {
       throw new PlacementError(`there is no barrel ${target.index}`);
