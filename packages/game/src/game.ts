@@ -33,7 +33,7 @@ import { CameraRig, type OrthographicView } from "./camera-rig";
 import { IsometricCamera, yawFacingMapAngle } from "./iso-camera";
 import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
 import { AimGuides } from "./aim-guides";
-import { Aim, describeAim, snapAim, type AimMode } from "./force-aim";
+import { Aim, describeAim, type AimMode } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { LevelPicker } from "./level-picker";
 import { createLevelObjects } from "./map-object";
@@ -158,7 +158,7 @@ export const Game = ({
   const spawnEntity = map.entities.find((e) => e.properties.classname === "info_player_start");
   const focus = (spawnEntity && getEntityWorldOrigin(spawnEntity)) ?? new THREE.Vector3();
   focus.y += 1;
-  // Snapping and aim descriptions are relative to the way the ragdoll faces.
+  // Aim descriptions and guides are relative to the way the ragdoll faces.
   const forwardYaw = spawnEntity ? getEntityWorldYaw(spawnEntity) : 0;
 
   // Two camera schemes: an isometric camera for editing (created once the
@@ -661,7 +661,7 @@ export const Game = ({
   /** Placement index drawn by each arrow; a new, uncommitted force uses placements.length. */
   const arrowIndices: number[] = [];
 
-  // Guides for the plane a force is being aimed across, matching the snapping.
+  // Guides for judging the angles a force is being aimed at.
   const aimGuides = new AimGuides(scene, forwardYaw);
 
   /** The placements as they'd be if the drag in progress were committed now. */
@@ -829,7 +829,6 @@ export const Game = ({
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const queryFilter = b3.b3DefaultQueryFilter();
-  const modifiers = { alt: false };
   const pointer = { x: 0, y: 0 };
 
   // Fingers need bigger targets than a mouse pointer, and different tips. Go
@@ -843,7 +842,6 @@ export const Game = ({
     if (event instanceof PointerEvent) pointerType = event.pointerType;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
-    modifiers.alt = event.altKey;
     const rect = renderer.domElement.getBoundingClientRect();
     pointerNdc.set(
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -946,7 +944,7 @@ export const Game = ({
   type MovablePlacement = Exclude<Placement, ForcePlacement | RopePlacement>;
   let drag: Drag | null = null;
 
-  const aimVector = (aim: Aim) => (modifiers.alt ? aim.raw.clone() : snapAim(aim.raw, forwardYaw));
+  const aimVector = (aim: Aim) => aim.raw.clone();
 
   function dragPlacement(d: Extract<Drag, { kind: "aim" | "move" }>): ForcePlacement | null {
     if (d.kind === "move") return { kind: "force", target: d.target, localPoint: d.localPoint, vector: d.vector };
@@ -1347,22 +1345,11 @@ export const Game = ({
   // Keys typed into a text field (e.g. the leaderboard name) aren't game controls.
   const isTyping = (event: KeyboardEvent) => event.target instanceof HTMLInputElement;
 
-  const onModifierChange = (event: KeyboardEvent) => {
-    if (isTyping(event) || event.key !== "Alt") return;
-    modifiers.alt = event.altKey;
-    if (drag) {
-      event.preventDefault();
-      updateDrag();
-    }
-  };
-  document.addEventListener("keyup", onModifierChange, { signal });
-
   document.addEventListener("keydown", (event) => {
     if (isTyping(event)) {
       if (event.code === "Escape") (event.target as HTMLElement).blur();
       return;
     }
-    onModifierChange(event);
     if (event.repeat) return;
     switch (event.code) {
       case "Space":

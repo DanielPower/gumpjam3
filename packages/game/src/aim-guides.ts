@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { MAX_ARROW_LENGTH } from "@stairs/shared/simulation";
 import type { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines } from "./fat-lines";
-import { SNAP_DEGREES, type Aim } from "./force-aim";
+import type { Aim } from "./force-aim";
 
 const DEG = Math.PI / 180;
 const FLAT_COLOR = 0x4dd0e1;
@@ -32,10 +32,13 @@ function arc(radius: number, from: number, to: number, steps: number, point: (an
   return points;
 }
 
+/** Guide spokes are this many degrees apart. */
+const GUIDE_DEGREES = 15;
+
 /**
- * Guides for whichever part of a force is being dragged, drawn from the same
- * rules as snapping: spokes every SNAP_DEGREES, with the directions snapping
- * pulls hardest towards drawn brighter.
+ * Guides for whichever part of a force is being dragged, to judge angles by:
+ * spokes every GUIDE_DEGREES, with the main directions (forward, back, the
+ * sides, level, straight up and down) drawn brighter.
  *
  * - Creating or turning: a level disc of spokes around the arrow's base,
  *   counted from the way the ragdoll faces. While creating, rings mark
@@ -59,8 +62,8 @@ export class AimGuides {
     const flatPoint = (yaw: number) => new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const major: THREE.Vector3[] = [];
     const minor: THREE.Vector3[] = [];
-    for (let step = 0; step < 360 / SNAP_DEGREES; step++) {
-      const degrees = step * SNAP_DEGREES;
+    for (let step = 0; step < 360 / GUIDE_DEGREES; step++) {
+      const degrees = step * GUIDE_DEGREES;
       const direction = flatPoint(forwardYaw + degrees * DEG);
       if (degrees % 90 === 0) major.push(new THREE.Vector3(), direction.clone().multiplyScalar(MAX_ARROW_LENGTH));
       else minor.push(direction.clone().multiplyScalar(MINOR_SPOKE_START), direction.clone().multiplyScalar(MAX_ARROW_LENGTH));
@@ -73,7 +76,7 @@ export class AimGuides {
     const heightPoint = (pitch: number) => new THREE.Vector3(Math.cos(pitch), Math.sin(pitch), 0);
     const heightMajor: THREE.Vector3[] = [];
     const heightMinor: THREE.Vector3[] = [];
-    for (let degrees = -90; degrees <= 90; degrees += SNAP_DEGREES) {
+    for (let degrees = -90; degrees <= 90; degrees += GUIDE_DEGREES) {
       const tip = heightPoint(degrees * DEG);
       (degrees % 90 === 0 ? heightMajor : heightMinor).push(new THREE.Vector3(), tip);
     }
@@ -96,7 +99,7 @@ export class AimGuides {
 
   /**
    * Show the guide for what's being dragged, or hide them all when nothing is.
-   * `vector` is the arrow as displayed (snapped), which the guides line up with.
+   * `vector` is the arrow as displayed, which the guides line up with.
    */
   update(aim: Aim | null, vector: THREE.Vector3 | null) {
     const mode = aim?.currentMode ?? null;

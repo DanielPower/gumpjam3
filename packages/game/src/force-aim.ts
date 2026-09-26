@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { MAX_ARROW_LENGTH, MIN_ARROW_LENGTH } from "@stairs/shared/simulation";
+import { MAX_ARROW_LENGTH } from "@stairs/shared/simulation";
 
 /**
  * What a drag changes. "create" pulls a new arrow out flat (heading and
@@ -8,13 +8,6 @@ import { MAX_ARROW_LENGTH, MIN_ARROW_LENGTH } from "@stairs/shared/simulation";
 export type AimMode = "create" | "heading" | "tilt" | "length";
 
 const DEG = Math.PI / 180;
-/** Aims snap to multiples of this; the aiming guides draw the same steps. */
-export const SNAP_DEGREES = 15;
-const SNAP_STEP = SNAP_DEGREES * DEG;
-/** Preferred directions capture the aim from further away than the grid does. */
-const STRONG_SNAP_WINDOW = 8 * DEG;
-const PREFERRED_YAWS = [0, 90 * DEG, -90 * DEG, 180 * DEG];
-const PREFERRED_PITCHES = [0, 90 * DEG, -90 * DEG];
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
@@ -32,7 +25,7 @@ const UP = new THREE.Vector3(0, 1, 0);
  * they began, so grabbing a handle never makes the arrow jump.
  */
 export class Aim {
-  /** Unsnapped vector, in world space. */
+  /** The aimed vector, in world space. */
   readonly raw = new THREE.Vector3();
   readonly origin: THREE.Vector3;
   private yaw = 0;
@@ -155,31 +148,12 @@ function closestAlongLine(origin: THREE.Vector3, direction: THREE.Vector3, ray: 
   return (b * ray.direction.dot(w) - direction.dot(w)) / denominator;
 }
 
-function snapAngle(angle: number, preferred: number[]) {
-  for (const p of preferred) {
-    const diff = Math.atan2(Math.sin(angle - p), Math.cos(angle - p));
-    if (Math.abs(diff) <= STRONG_SNAP_WINDOW) return p;
-  }
-  return Math.round(angle / SNAP_STEP) * SNAP_STEP;
-}
 
 /** Yaw is measured about +Y from +Z towards +X, matching getEntityWorldYaw. */
 function yawOf(v: THREE.Vector3) {
   return Math.atan2(v.x, v.z);
 }
 
-/**
- * Snap direction to 15° steps, with a stronger pull towards straight forward,
- * back, left and right (relative to `forwardYaw`), level, and straight up/down.
- */
-export function snapAim(v: THREE.Vector3, forwardYaw: number): THREE.Vector3 {
-  const length = v.length();
-  if (length < MIN_ARROW_LENGTH) return v.clone();
-  const yaw = forwardYaw + snapAngle(yawOf(v) - forwardYaw, PREFERRED_YAWS);
-  const pitch = snapAngle(Math.atan2(v.y, Math.hypot(v.x, v.z)), PREFERRED_PITCHES);
-  const flat = length * Math.cos(pitch);
-  return new THREE.Vector3(flat * Math.sin(yaw), length * Math.sin(pitch), flat * Math.cos(yaw));
-}
 
 /** Human-readable direction relative to the ragdoll, e.g. "forward, 30° up". */
 export function describeAim(v: THREE.Vector3, forwardYaw: number): string {
