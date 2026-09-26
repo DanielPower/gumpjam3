@@ -10,7 +10,6 @@ import {
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
   MINE_SURFACE_OFFSET,
-  MIN_ROPE_LENGTH,
   TIME_STEP,
   VELOCITY_PER_METER,
   type BodyRef,
@@ -232,6 +231,8 @@ export const Game = ({
   );
   const ropeView = new RopeView();
   scene.add(ropeView.object3d);
+  /** Each rope's links, following their physics bodies (drawn by ropeView). */
+  let ropeSegments: THREE.Object3D[][] = [];
 
   const boxGeometry = new THREE.BoxGeometry(
     BOX_HALF_EXTENTS[0] * 2,
@@ -343,6 +344,7 @@ export const Game = ({
     for (const [id, mesh] of baitMeshes) mesh.visible = !simulation.baitConsumed(id);
     explosives.sync(simulation);
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ragdollMeshes[bone]));
+    simulation.ropes.forEach(({ segments }, i) => segments.forEach((body, j) => syncObjectToBody(b3, body, ropeSegments[i][j])));
     if (physicsDebug?.object3d.visible) physicsDebug.update();
   };
   /** Everything that moves with the physics, for drawing between steps. */
@@ -351,6 +353,7 @@ export const Game = ({
     ...propMeshes.values(),
     ...explosives.barrelMeshes,
     ...explosives.mineMeshes,
+    ...ropeSegments.flat(),
     ...ragdollMeshes,
   ];
   const interpolator = new PoseInterpolator();
@@ -390,14 +393,25 @@ export const Game = ({
     return simulation.isLevel(hit.body) ? { target: { kind: "level" }, localPoint: hit.point.toArray() } : null;
   };
 
-  /** Draw every rope between where its ends are now; ones tied to something blown up are gone. */
+  /**
+   * Draw every rope through its links as they are now. An end tied to
+   * something that's blown up hangs loose, so it's drawn at the rope's own end.
+   */
   const updateRopes = () => {
     ropePlacements().forEach(({ placement, index }, i) => {
-      const gone = [placement.a, placement.b].some((end) => {
+      const links = ropeSegments[i] ?? [];
+      if (!links.length) return;
+      const along = (link: THREE.Object3D, side: number) => {
+        link.updateMatrixWorld();
+        return link.localToWorld(new THREE.Vector3(0, side * (link.userData.halfLength as number), 0));
+      };
+      const endPoint = (end: RopeEnd, link: THREE.Object3D, side: number) => {
         const mesh = meshOfTarget(end.target);
-        return mesh !== null && (!mesh || !mesh.visible);
-      });
-      ropeView.update(i, ropeEndPoint(placement.a), ropeEndPoint(placement.b), index === selected, !gone);
+        return mesh === null || (mesh && mesh.visible) ? ropeEndPoint(end) : along(link, side);
+      };
+      const joints = links.slice(0, -1).map((link) => along(link, 1));
+      const points = [endPoint(placement.a, links[0], -1), ...joints, endPoint(placement.b, links[links.length - 1], 1)];
+      ropeView.update(i, points, index === selected);
     });
   };
 
@@ -504,13 +518,15 @@ export const Game = ({
     });
     ratRouteLines.visible = !running;
 
-    // Each rope is as long as its ends are apart now, as in the simulation.
-    ropeView.setRopes(
-      ropePlacements().map(({ placement }) => {
-        const [a, b] = [simulation.ropeEndPoint(placement.a), simulation.ropeEndPoint(placement.b)];
-        return Math.max(MIN_ROPE_LENGTH, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    // A rope is drawn from one end, through the joints between its links, to the other.
+    ropeSegments = simulation.ropes.map(({ segments, halfLength }) =>
+      segments.map(() => {
+        const link = new THREE.Object3D();
+        link.userData.halfLength = halfLength;
+        return link;
       }),
     );
+    ropeView.setRopes(ropeSegments.map((links) => links.length + 1));
 
     syncVisuals();
     refreshForces();

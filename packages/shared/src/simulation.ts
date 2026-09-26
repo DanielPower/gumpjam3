@@ -1,4 +1,4 @@
-import type { Box3DModule, b3BodyId, b3ShapeId, b3Vec3, b3WorldId } from "box3d.js";
+import type { Box3DModule, b3BodyId, b3Quat, b3ShapeId, b3Vec3, b3WorldId } from "box3d.js";
 import * as THREE from "three";
 import { levelSolids, pathProgress, type SurfaceMaterial } from "./level-entities";
 import { createHuman } from "./ragdoll";
@@ -53,6 +53,16 @@ const MINE_DENSITY = 1500;
 /** Ropes can be this long at most, and no shorter than the minimum (metres). */
 export const MAX_ROPE_LENGTH = 6;
 export const MIN_ROPE_LENGTH = 0.2;
+/**
+ * A rope is a chain of capsules, each at most this long (metres), linked end to
+ * end by ball joints, so it swings, drapes, and wraps around what it hits.
+ */
+const ROPE_SEGMENT_LENGTH = 0.2;
+export const ROPE_RADIUS = 0.035;
+/** About 5 kg per metre: heavy enough to hold together between heavy boxes. */
+const ROPE_DENSITY = 1300;
+/** Each rope's capsules share a collision group (the negative of this plus its index), so they don't collide with each other. */
+const ROPE_GROUP_BASE = 100;
 
 /** Mines may touch other things, but not overlap them by more than this (metres). */
 const MINE_OVERLAP_TOLERANCE = 0.01;
@@ -162,6 +172,8 @@ export type Simulation = {
   props: Map<number, b3BodyId>;
   /** Barrel bodies, by their order in the map. Destroyed when they go off. */
   barrels: b3BodyId[];
+  /** Each rope's chain of capsules, in placement order, and each capsule's half-length. */
+  ropes: { segments: b3BodyId[]; halfLength: number }[];
   /** Mine bodies keyed by their placement's id. Destroyed when they go off. */
   mines: Map<number, b3BodyId>;
   /** Seconds left on an armed mine's fuse, or null if it isn't armed (or has gone off). */
@@ -464,12 +476,49 @@ export function createSimulation(
   const ropeBody = (target: RopeTarget) => (target.kind === "level" ? levelBody : resolve(target));
   const ropeEndPoint = (end: RopeEnd): b3Vec3 => b3.b3Body_GetWorldPoint([0, 0, 0], ropeBody(end.target), end.localPoint);
 
-  // Ropes: distance joints that can shorten freely (a spring with no
-  // stiffness) but not lengthen past the rope's length (the limit).
-  for (const placement of placements) {
-    if (placement.kind !== "rope") continue;
+  // Ropes: a chain of capsules from one end to the other, starting straight.
+  const ropes: { segments: b3BodyId[]; halfLength: number }[] = [];
+  const ropeSegmentKeys = new Set<string>();
+  const identity: b3Quat = [0, 0, 0, 1];
+  const ballJoint = (bodyA: b3BodyId, pointA: b3Vec3, bodyB: b3BodyId, pointB: b3Vec3) => {
+    const def = b3.b3DefaultSphericalJointDef();
+    def.base.bodyIdA = bodyA;
+    def.base.bodyIdB = bodyB;
+    def.base.localFrameA = { position: pointA, quaternion: identity };
+    def.base.localFrameB = { position: pointB, quaternion: identity };
+    b3.b3CreateSphericalJoint(world, def);
+  };
+  placements.filter((p): p is RopePlacement => p.kind === "rope").forEach((placement, ropeIndex) => {
     const [a, b] = [ropeEndPoint(placement.a), ropeEndPoint(placement.b)];
-    const length = Math.max(MIN_ROPE_LENGTH, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    const start = new THREE.Vector3(...a);
+    const span = new THREE.Vector3(...b).sub(start);
+    const length = Math.max(MIN_ROPE_LENGTH, span.length());
+    const count = Math.max(2, Math.ceil(length / ROPE_SEGMENT_LENGTH));
+    const halfLength = length / count / 2;
+    // Each capsule lies along its local Y, turned to point along the rope.
+    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), span.clone().normalize());
+    const segments: b3BodyId[] = [];
+    for (let i = 0; i < count; i++) {
+      const bodyDef = b3.b3DefaultBodyDef();
+      bodyDef.type = b3.b3BodyType.b3_dynamicBody;
+      bodyDef.position = start.clone().addScaledVector(span, (i + 0.5) / count).toArray();
+      bodyDef.rotation = [turn.x, turn.y, turn.z, turn.w];
+      const body = b3.b3CreateBody(world, bodyDef);
+      const shapeDef = b3.b3DefaultShapeDef();
+      shapeDef.density = ROPE_DENSITY;
+      shapeDef.filter.groupIndex = -(ROPE_GROUP_BASE + ropeIndex);
+      b3.b3CreateCapsuleShape(body, shapeDef, { center1: [0, -halfLength, 0], center2: [0, halfLength, 0], radius: ROPE_RADIUS });
+      if (i > 0) ballJoint(segments[i - 1], [0, halfLength, 0], body, [0, -halfLength, 0]);
+      segments.push(body);
+      ropeSegmentKeys.add(bodyKey(body));
+    }
+    ballJoint(ropeBody(placement.a.target), placement.a.localPoint, segments[0], [0, -halfLength, 0]);
+    ballJoint(ropeBody(placement.b.target), placement.b.localPoint, segments[count - 1], [0, halfLength, 0]);
+    ropes.push({ segments, halfLength });
+
+    // And a limit on how far apart the ends can get, so heavy things on the
+    // ends can't stretch the chain: free to shorten (a spring with no
+    // stiffness), but not lengthen past the rope's length.
     const def = b3.b3DefaultDistanceJointDef();
     def.base.bodyIdA = ropeBody(placement.a.target);
     def.base.bodyIdB = ropeBody(placement.b.target);
@@ -485,7 +534,7 @@ export function createSimulation(
     def.minLength = 0;
     def.maxLength = length;
     b3.b3CreateDistanceJoint(world, def);
-  }
+  });
 
   const applyForces = () => {
     const point: b3Vec3 = [0, 0, 0];
@@ -507,8 +556,10 @@ export function createSimulation(
   const boxOverlaps = (position: b3Vec3, ignoreProp?: number) => {
     let overlaps = false;
     b3.b3World_OverlapShape(world, position, boxCorners, 0, queryFilter, (shapeId: b3ShapeId) => {
-      const ref = refs.get(bodyKey(b3.b3Shape_GetBody(shapeId)));
-      if (ref?.kind === "prop" && ref.id === ignoreProp) return true;
+      const key = bodyKey(b3.b3Shape_GetBody(shapeId));
+      const ref = refs.get(key);
+      // Ropes follow whatever they're tied to, so they're never in the way.
+      if ((ref?.kind === "prop" && ref.id === ignoreProp) || ropeSegmentKeys.has(key)) return true;
       overlaps = true;
       return false;
     });
@@ -647,9 +698,11 @@ export function createSimulation(
   const mineProblem = (position: b3Vec3, normal: b3Vec3, ignoreMine?: number): string | null => {
     const length = Math.hypot(...normal);
     if (Math.abs(length - 1) > 1e-3) return "a mine's normal must be a unit vector";
+    // Ropes follow whatever they're tied to, so they're never in the way.
     const isSelf = (shapeId: b3ShapeId) => {
-      const ref = refs.get(bodyKey(b3.b3Shape_GetBody(shapeId)));
-      return ref?.kind === "mine" && ref.id === ignoreMine;
+      const key = bodyKey(b3.b3Shape_GetBody(shapeId));
+      const ref = refs.get(key);
+      return (ref?.kind === "mine" && ref.id === ignoreMine) || ropeSegmentKeys.has(key);
     };
 
     let resting = false;
@@ -702,6 +755,25 @@ export function createSimulation(
     const length = Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
     if (length > MAX_ROPE_LENGTH) return `a rope can be at most ${MAX_ROPE_LENGTH} m long`;
     if (length < MIN_ROPE_LENGTH) return "a rope's ends are too close together";
+
+    // It starts straight, so it mustn't pass through anything on the way,
+    // except what it's tied to (and other ropes, which just push aside).
+    const tiedTo = new Set([a.target, b.target].flatMap((target) => (target.kind === "level" ? [] : [bodyKey(resolve(target))])));
+    const along = new THREE.Vector3(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]).normalize();
+    // Clear of the surfaces its ends are tied to.
+    const clearance = ROPE_RADIUS + 0.05;
+    if (length > 2 * clearance) {
+      const from = new THREE.Vector3(...pa).addScaledVector(along, clearance);
+      const to = new THREE.Vector3(...pb).addScaledVector(along, -clearance);
+      let blocked = false;
+      b3.b3World_OverlapShape(world, from.toArray(), [0, 0, 0, ...to.clone().sub(from).toArray()], ROPE_RADIUS * 0.8, queryFilter, (shapeId: b3ShapeId) => {
+        const key = bodyKey(b3.b3Shape_GetBody(shapeId));
+        if (tiedTo.has(key) || ropeSegmentKeys.has(key)) return true;
+        blocked = true;
+        return false;
+      });
+      if (blocked) return "a rope can't pass through things";
+    }
     return null;
   };
 
@@ -734,6 +806,7 @@ export function createSimulation(
     movers,
     props,
     barrels,
+    ropes,
     mines,
     mineFuse: (id) => {
       const armed = armedAt.get(id);
