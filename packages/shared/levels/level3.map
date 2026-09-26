@@ -10,6 +10,8 @@
 "inventory_force" "1"
 "inventory_box" "1"
 "inventory_mine" "3"
+"inventory_rope" "2"
+"inventory_thruster" "2"
 // brush 0
 {
 ( 704 -224 -64 ) ( 704 -224 -128 ) ( 704 -288 -64 ) sandstone_dark 0 0 0 1 1

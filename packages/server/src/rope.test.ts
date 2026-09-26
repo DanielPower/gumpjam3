@@ -63,5 +63,6 @@ test("ropes tie two different things, within reach, to the level only at its sur
     assert.throws(() => validatePlacements(b3, stairs, placements), message, what);
   }
   // Levels without ropes in their inventory don't allow any.
-  assert.throws(() => validatePlacements(b3, levels.get("level3")!, [tie]), /allows 0 rope/);
+  const noRopes = { ...stairs, inventory: { ...stairs.inventory, rope: 0 } };
+  assert.throws(() => validatePlacements(b3, noRopes, [box, tie]), /allows 0 rope/);
 });

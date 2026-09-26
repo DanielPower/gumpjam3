@@ -72,7 +72,8 @@ for k in range(-6, 7, 2):
     world.append(box(EDGE, EDGE + 0.3, TOP, TOP + 0.01, k - 0.5, k + 0.5, "yellow"))
 
 m.entity({"classname": "worldspawn", "message": "Blast Quarry", "sky": "#bcd9ea", "sun": "64 -24 384",
-          "inventory_force": "1", "inventory_box": "1", "inventory_mine": "3"}, world)
+          "inventory_force": "1", "inventory_box": "1", "inventory_mine": "3",
+          "inventory_rope": "2", "inventory_thruster": "2"}, world)
 
 # Explosive barrels: on the terraces, and in fuel depots on the pit floor.
 barrels = [

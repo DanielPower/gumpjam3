@@ -175,16 +175,29 @@ body {
   background: rgba(222, 184, 64, 0.9);
 }
 
+/* On a dark, translucent pill with a tight shadow, so it reads over bright and busy scenes. */
 #hint {
   position: absolute;
   bottom: 5.75rem;
-  width: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 2rem);
+  box-sizing: border-box;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.875rem;
+  background: rgba(0, 0, 0, 0.55);
   text-align: center;
-  color: #ddd;
+  color: white;
   font-size: 0.875rem;
-  text-shadow: 0 0.0625rem 0.125rem black;
+  font-weight: 500;
+  text-shadow: 0 0.0625rem 0.125rem rgba(0, 0, 0, 0.9);
   pointer-events: none;
   z-index: 100;
+}
+
+#hint:empty {
+  display: none;
 }
 
 #aim-label {
@@ -491,8 +504,7 @@ canvas {
   }
 
   #hint {
-    box-sizing: border-box;
-    padding: 0 1rem;
+    max-width: calc(100% - 1.5rem);
   }
 }
 
