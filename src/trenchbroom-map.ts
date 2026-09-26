@@ -372,3 +372,18 @@ export function getEntityWorldOrigin(
   }
   return mapToWorld(new THREE.Vector3(origin[0], origin[1], origin[2]), options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS);
 }
+
+/**
+ * Read an entity's facing as a world-space rotation about +Y, in radians, that
+ * turns +Z towards the direction it faces. Uses "angle" (Quake-style yaw in
+ * degrees from map +X), falling back to the yaw in "angles" ("pitch yaw roll").
+ * The Quake up/down special values (-1, -2) and missing keys give 0 degrees.
+ */
+export function getEntityWorldYaw(entity: TrenchBroomEntity): number {
+  const angles = entity.properties.angles?.trim().split(/\s+/).map(Number);
+  let degrees = Number(entity.properties.angle ?? angles?.[1] ?? 0);
+  if (!Number.isFinite(degrees) || degrees === -1 || degrees === -2) degrees = 0;
+  // Map yaw 0 faces map +X, which is world +X; a +Y rotation of 90 degrees
+  // turns +Z to +X. Map +Y becomes world -Z, so both rotate the same way.
+  return THREE.MathUtils.degToRad(degrees + 90);
+}

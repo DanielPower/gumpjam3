@@ -4,6 +4,8 @@
 // entity 0
 {
 "classname" "worldspawn"
+"inventory_force" "2"
+"inventory_box" "3"
 // brush 0
 {
 ( -240 64 16 ) ( -240 -64 16 ) ( -240 -64 -16 ) __TB_empty 0 0 0 1 1
@@ -224,5 +226,6 @@
 // entity 1
 {
 "classname" "info_player_start"
-"origin" "288 0 456"
+"origin" "304 0 408"
+"angle" "180"
 }

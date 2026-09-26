@@ -404,7 +404,33 @@ function normQ(q: b3Quat): b3Quat {
   return [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
 }
 
-// Faithful port of CreateHuman(): builds the 14-bone humanoid at `position`.
+// Quaternions are [x, y, z, w].
+function mulQ(a: b3Quat, b: b3Quat): b3Quat {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+
+function rotateV(q: b3Quat, v: b3Vec3): b3Vec3 {
+  // v + 2w(q × v) + 2q × (q × v)
+  const [qx, qy, qz, qw] = q;
+  const tx = 2 * (qy * v[2] - qz * v[1]);
+  const ty = 2 * (qz * v[0] - qx * v[2]);
+  const tz = 2 * (qx * v[1] - qy * v[0]);
+  return [
+    v[0] + qw * tx + (qy * tz - qz * ty),
+    v[1] + qw * ty + (qz * tx - qx * tz),
+    v[2] + qw * tz + (qx * ty - qy * tx),
+  ];
+}
+
+// Faithful port of CreateHuman(): builds the 14-bone humanoid at `position`,
+// rotated by `rotation` about that point (unrotated, the ragdoll faces +Z).
 // `group` is a unique per-human index so a ragdoll's own limbs don't self-collide
 // (shapes sharing a negative group index never collide). `friction` is the joint
 // motor torque, `hertz`/`damping` an optional joint spring.
@@ -412,6 +438,7 @@ export function createHuman(
   b3: Box3DModule,
   world: b3WorldId,
   position: b3Vec3,
+  rotation: b3Quat,
   group: number,
   friction = 0.05,
   hertz = 0,
@@ -423,11 +450,12 @@ export function createHuman(
   for (const bone of BONES) {
     const bodyDef = b3.b3DefaultBodyDef();
     bodyDef.type = b3.b3BodyType.b3_dynamicBody;
-    bodyDef.rotation = bone.refQ;
+    const offset = rotateV(rotation, bone.refP);
+    bodyDef.rotation = normQ(mulQ(rotation, bone.refQ));
     bodyDef.position = [
-      position[0] + bone.refP[0],
-      position[1] + bone.refP[1],
-      position[2] + bone.refP[2],
+      position[0] + offset[0],
+      position[1] + offset[1],
+      position[2] + offset[2],
     ];
     const body = b3.b3CreateBody(world, bodyDef);
 
