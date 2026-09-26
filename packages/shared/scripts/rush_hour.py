@@ -81,7 +81,9 @@ for dx, dz in ((1.9, 0), (-1.9, 0), (0, 1.9), (0, -1.9)):
 mgr.append(box(cx - 1.96, cx + 1.96, 1.25, 1.35, cz - 0.05, cz + 0.05, "metal"))
 mgr.append(box(cx - 0.05, cx + 0.05, 1.25, 1.35, cz - 1.96, cz + 1.96, "metal"))
 ox, oy, oz = tb(cx, 0, cz)
-entity({"classname": "func_rotating", "speed": "220", "origin": f"{fmt(ox)} {fmt(oy)} {fmt(oz)}"}, mgr)
+# Spins freely: it starts fast, then winds down unless something keeps it going.
+entity({"classname": "func_spinner", "speed": "220", "mass": "400", "spin_down": "8",
+        "origin": f"{fmt(ox)} {fmt(oy)} {fmt(oz)}"}, mgr)
 
 # --- a trampoline on the other side, tilted towards the street ------------------
 def tilted_pad(x0, x1, z0, z1, low, high):

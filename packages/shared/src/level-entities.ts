@@ -46,6 +46,12 @@ export type MoverMotion =
   | { kind: "rotate"; angularVelocity: THREE.Vector3 }
   | { kind: "path"; offset: THREE.Vector3; speed: number; loop: boolean; phase: number }
   | { kind: "rat"; speed: number; delay: number; forward: THREE.Vector3 }
+  /**
+   * A physics body pinned at its pivot, free to turn about `axis` (unit),
+   * starting at `angularVelocity` (radians per second about the axis) and slowing
+   * by about 63% every `spinDown` seconds unless something keeps it going.
+   */
+  | { kind: "spinner"; axis: THREE.Vector3; angularVelocity: number; mass: number; spinDown: number }
   /** A physics car driving once along `offset` at `speed`, until it hits something or gets to the end. */
   | { kind: "car"; offset: THREE.Vector3; speed: number; phase: number; mass: number };
 
@@ -106,6 +112,20 @@ export function levelSolids(map: TrenchBroomMap): LevelSolids {
         pivot,
         brushes: relativeTo(brushes, pivot),
         motion: { kind: "rotate", angularVelocity: axis.multiplyScalar(radiansPerSecond) },
+      });
+    } else if (classname === "func_spinner") {
+      const pivot = getEntityWorldOrigin(entity) ?? brushBounds(brushes).getCenter(new THREE.Vector3());
+      movers.push({
+        entityIndex,
+        pivot,
+        brushes: relativeTo(brushes, pivot),
+        motion: {
+          kind: "spinner",
+          axis: mapVectorToWorld(entity.properties.axis)?.normalize() ?? new THREE.Vector3(0, 1, 0),
+          angularVelocity: THREE.MathUtils.degToRad(number(entity, "speed", 90)),
+          mass: Math.max(1, number(entity, "mass", 400)),
+          spinDown: Math.max(0.1, number(entity, "spin_down", 8)),
+        },
       });
     } else if (classname === "func_mover") {
       const pivot = brushBounds(brushes).getCenter(new THREE.Vector3());

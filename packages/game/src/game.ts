@@ -384,6 +384,7 @@ export const Game = ({
     target.kind === "level" ? null
     : target.kind === "ragdoll" ? ragdollMeshes[target.bone]
     : target.kind === "prop" ? propMeshes.get(target.id)
+    : target.kind === "mover" ? levelObjects.movers[target.index]
     : explosives.meshOf(target);
 
   /**
@@ -473,7 +474,9 @@ export const Game = ({
   const updateThrusters = (time: number) => {
     thrusterPlacements().forEach(({ placement, index }, i) => {
       const pose = thrusterPose(placement);
-      const burning = pose !== null && running && run !== null && run.stepsTaken > 0 && simulation.thrusterBurning(i);
+      // Only while the run is going: once it's over, nothing burns, even with fuel left.
+      const burning =
+        pose !== null && running && run !== null && !run.finished && run.stepsTaken > 0 && simulation.thrusterBurning(i);
       thrusterView.update(i, pose, burning, index === selected, time);
       const sound = thrusterSounds.get(i);
       const pan = pose ? pose.point.clone().project(activeCamera).x : 0;
@@ -903,8 +906,8 @@ export const Game = ({
     if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
     return touch
-      ? "Choose an item to set up the run · tap a placedrag to pan · pinch to zoom · twist two fingers to rotate"
-      : "Choose an item to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom";
+      ? "Choose an item to set up the run · tap a placed item to select it · drag to pan · pinch to zoom · twist two fingers to rotate"
+      : "Choose an item to set up the run · click a placed item to select it · drag to pan · right-drag to rotate · scroll to zoom";
   };
 
   // --- Picking ----------------------------------------------------------------

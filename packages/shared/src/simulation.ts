@@ -111,7 +111,9 @@ export type BodyRef =
   | { kind: "ragdoll"; bone: number }
   | { kind: "prop"; id: number }
   | { kind: "barrel"; index: number }
-  | { kind: "mine"; id: number };
+  | { kind: "mine"; id: number }
+  /** A moving part of the level that's a physics body (a spinner or car), by its index in `movers`. */
+  | { kind: "mover"; index: number };
 
 export type ForcePlacement = {
   kind: "force";
@@ -334,6 +336,14 @@ export function createSimulation(
     }
   };
   const levelBody = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
+  /** Scale a body's (default) density so it weighs `mass`, whatever its shape. */
+  const setMass = (body: b3BodyId, mass: number) => {
+    const shapes = b3.b3Body_GetShapes(body);
+    const density = (b3.b3DefaultShapeDef().density * mass) / Math.max(b3.b3Body_GetMass(body), 1e-6);
+    for (const shape of shapes) b3.b3Shape_SetDensity(shape, density, false);
+    shapes.delete();
+    b3.b3Body_ApplyMassFromShapes(body);
+  };
   for (const solid of solids.statics) addBrushes(levelBody, solid.brushes, solid.material);
 
   /** Cars, by their index in `movers`: which way they drive, and whether the driver still is. */
@@ -342,6 +352,26 @@ export function createSimulation(
 
   const movers = solids.movers.map((mover, index) => {
     const bodyDef = b3.b3DefaultBodyDef();
+    if (mover.motion.kind === "spinner") {
+      // Pinned to the level by a hinge about its axis (the joint frames' Z).
+      const { axis, angularVelocity, mass, spinDown } = mover.motion;
+      bodyDef.type = b3.b3BodyType.b3_dynamicBody;
+      bodyDef.position = mover.pivot.toArray();
+      bodyDef.angularVelocity = axis.clone().multiplyScalar(angularVelocity).toArray();
+      bodyDef.angularDamping = 1 / spinDown;
+      const body = b3.b3CreateBody(world, bodyDef);
+      addBrushes(body, mover.brushes, null);
+      setMass(body, mass);
+      const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
+      const frame: b3Quat = [turn.x, turn.y, turn.z, turn.w];
+      const def = b3.b3DefaultRevoluteJointDef();
+      def.base.bodyIdA = levelBody;
+      def.base.bodyIdB = body;
+      def.base.localFrameA = { position: mover.pivot.toArray(), quaternion: frame };
+      def.base.localFrameB = { position: [0, 0, 0], quaternion: frame };
+      b3.b3CreateRevoluteJoint(world, def);
+      return body;
+    }
     if (mover.motion.kind === "car") {
       const { offset, speed, phase, mass } = mover.motion;
       const direction = offset.clone().normalize();
@@ -350,15 +380,10 @@ export function createSimulation(
       bodyDef.linearVelocity = direction.clone().multiplyScalar(speed).toArray();
       const body = b3.b3CreateBody(world, bodyDef);
       addBrushes(body, mover.brushes, CAR_SURFACE);
-      // Scale the (default) density so the car weighs `mass`, whatever its shape.
+      setMass(body, mass);
       const shapes = b3.b3Body_GetShapes(body);
-      const density = (b3.b3DefaultShapeDef().density * mass) / Math.max(b3.b3Body_GetMass(body), 1e-6);
-      for (const shape of shapes) {
-        b3.b3Shape_SetDensity(shape, density, false);
-        b3.b3Shape_EnableHitEvents(shape, true);
-      }
+      for (const shape of shapes) b3.b3Shape_EnableHitEvents(shape, true);
       shapes.delete();
-      b3.b3Body_ApplyMassFromShapes(body);
       cars.set(index, { direction, start: mover.pivot.clone(), length: offset.length(), speed, driving: true });
       carKeys.set(bodyKey(body), index);
       return body;
@@ -442,6 +467,10 @@ export function createSimulation(
   };
 
   const refs = new Map<string, BodyRef>();
+  // Moving level parts that are physics bodies can be pushed, tied and thrust on like anything else.
+  solids.movers.forEach(({ motion }, index) => {
+    if (motion.kind === "spinner" || motion.kind === "car") refs.set(bodyKey(movers[index]), { kind: "mover", index });
+  });
   let ragdoll: b3BodyId[] = [];
 
   for (const entity of map.entities) {
@@ -543,6 +572,7 @@ export function createSimulation(
       ref.kind === "ragdoll" ? ragdoll[ref.bone]
       : ref.kind === "prop" ? props.get(ref.id)
       : ref.kind === "mine" ? mines.get(ref.id)
+      : ref.kind === "mover" ? (refs.get(bodyKey(movers[ref.index] ?? levelBody))?.kind === "mover" ? movers[ref.index] : undefined)
       : barrels[ref.index];
     if (!body) throw new Error(`No body for ${JSON.stringify(ref)}`);
     return body;

@@ -96,3 +96,29 @@ test("each vehicle drives its road once, ending up in the far tunnel", () => {
   assert.ok(carMost < -18, `the car got to z ${carMost.toFixed(1)}`);
   assert.ok(busLeast > 18, `the bus got to z ${busLeast.toFixed(1)}`);
 });
+
+test("the merry-go-round spins in place and winds down, unless a thruster keeps it going", () => {
+  // A thruster on the end of one of its arms, pushing it round the way it already spins.
+  const thruster: Placement = { kind: "thruster", target: { kind: "mover", index: 0 }, localPoint: [1.9, 1.3, 0.05], localNormal: [0, 0, 1] };
+  const spin = (placements: Placement[]) => {
+    const sim = createSimulation(b3, level.map, placements);
+    const start = b3.b3Body_GetPosition([0, 0, 0], sim.movers[0]);
+    const spins: number[] = [];
+    for (let step = 0; step <= 360; step++) {
+      if (step % 60 === 0) spins.push(b3.b3Body_GetAngularVelocity([0, 0, 0], sim.movers[0])[1]);
+      sim.step();
+    }
+    const end = b3.b3Body_GetPosition([0, 0, 0], sim.movers[0]);
+    sim.destroy();
+    assert.ok(Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]) < 0.01, "it stays pinned");
+    return spins;
+  };
+  const free = spin([]);
+  assert.ok(free[6] < 0.6 * free[0], `on its own it slows from ${free[0].toFixed(1)} to ${free[6].toFixed(1)} rad/s`);
+  const pushed = spin([thruster]);
+  assert.ok(pushed[6] > free[0], `with a thruster it speeds up, to ${pushed[6].toFixed(1)} rad/s`);
+  assert.doesNotThrow(() => validatePlacements(b3, level, [thruster]));
+  // The street's vehicles are bodies too, but kinematic movers (there are none here) and made-up ones aren't.
+  assert.throws(() => validatePlacements(b3, level, [{ ...thruster, target: { kind: "mover", index: 9 } } as Placement]), /no moving body 9/);
+  assert.throws(() => validatePlacements(b3, level, [{ ...thruster, localPoint: [9, 0, 0] } as Placement]), /too far from its body/);
+});

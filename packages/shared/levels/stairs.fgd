@@ -40,6 +40,14 @@
 	axis(string) : "Axis in map coordinates; defaults to map Z (world vertical)" : "0 0 1"
 ]
 
+@SolidClass = func_spinner : "Pinned at its pivot, free to turn about an axis: starts spinning, then slows unless something keeps it going" [
+	origin(string) : "Pivot (map units); defaults to the centre of the brushes"
+	speed(string) : "Starting spin, degrees per second; negative spins the other way" : "90"
+	axis(string) : "Axis in map coordinates; defaults to map Z (world vertical)" : "0 0 1"
+	mass(string) : "Kilograms" : "400"
+	spin_down(string) : "Seconds for the spin to fall by about two thirds, on its own" : "8"
+]
+
 @SolidClass = func_mover : "Travels along a path, driven by the run's clock" [
 	move(string) : "Offset to travel, in map units" : "0 0 0"
 	speed(string) : "Map units per second" : "256"

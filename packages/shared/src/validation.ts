@@ -2,6 +2,7 @@ import type { Box3DModule, b3Vec3 } from "box3d.js";
 import * as THREE from "three";
 import { BODY_PARTS } from "./damage";
 import type { Level } from "./level";
+import { levelSolids } from "./level-entities";
 import {
   createSimulation,
   MAX_ARROW_LENGTH,
@@ -43,7 +44,8 @@ function bodyRef(value: unknown, what: string): BodyRef {
   if (value.kind === "prop") return { kind: "prop", id: integer(value.id, `${what}.id`) };
   if (value.kind === "barrel") return { kind: "barrel", index: integer(value.index, `${what}.index`) };
   if (value.kind === "mine") return { kind: "mine", id: integer(value.id, `${what}.id`) };
-  throw new PlacementError(`${what}.kind must be "ragdoll", "prop", "barrel" or "mine"`);
+  if (value.kind === "mover") return { kind: "mover", index: integer(value.index, `${what}.index`) };
+  throw new PlacementError(`${what}.kind must be "ragdoll", "prop", "barrel", "mine" or "mover"`);
 }
 
 function ropeEnd(value: unknown, what: string): RopeEnd {
@@ -138,6 +140,18 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
     }
     if (target.kind === "barrel" && !(target.index >= 0 && target.index < barrelCount(level))) {
       throw new PlacementError(`there is no barrel ${target.index}`);
+    }
+    if (target.kind === "mover") {
+      // Only moving parts that are physics bodies, and anywhere on them (they can be big).
+      const mover = levelSolids(level.map).movers[target.index];
+      if (!mover || (mover.motion.kind !== "spinner" && mover.motion.kind !== "car")) {
+        throw new PlacementError(`there is no moving body ${target.index}`);
+      }
+      const reach = Math.max(...mover.brushes.flatMap((brush) => brush.vertices.map((v) => v.length())));
+      if (new THREE.Vector3(...localPoint).length() > reach + 0.1) {
+        throw new PlacementError(`a ${what} is attached too far from its body`);
+      }
+      return;
     }
     if (new THREE.Vector3(...localPoint).length() > MAX_ATTACH_DISTANCE) {
       throw new PlacementError(`a ${what} is attached too far from its body`);

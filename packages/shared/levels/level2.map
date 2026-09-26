@@ -589,8 +589,10 @@
 }
 // entity 1
 {
-"classname" "func_rotating"
+"classname" "func_spinner"
 "speed" "220"
+"mass" "400"
+"spin_down" "8"
 "origin" "-19.2 -145.6 0"
 // brush 0
 {
