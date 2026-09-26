@@ -28,7 +28,8 @@ import {
 import { CameraRig } from "./camera-rig";
 import { IsometricCamera, yawFacingMapAngle } from "./iso-camera";
 import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
-import { Aim, describeAim, snapAim } from "./force-aim";
+import { AimGuides } from "./aim-guides";
+import { Aim, describeAim, snapAim, type AimMode } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { LevelPicker } from "./level-picker";
 import { createLevelObjects } from "./map-object";
@@ -37,6 +38,8 @@ import { createTrajectoryPreview } from "./preview";
 import { leaderboardAvailable } from "./api";
 import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
 const FIELD_OF_VIEW = 75;
 const CLIP_NEAR = 0.1;
@@ -380,7 +383,7 @@ export const Game = async ({
       scene.add(mesh);
     }
     for (const line of ratRouteLines.children) {
-      if (!(line instanceof THREE.Line)) continue;
+      if (!(line instanceof LineSegments2)) continue;
       line.geometry.dispose();
       if (Array.isArray(line.material)) line.material.forEach((material) => material.dispose());
       else line.material.dispose();
@@ -389,11 +392,10 @@ export const Game = async ({
     const routeColors = [0xffd54a, 0xff8a65];
     simulation.ratRoutes().forEach((route, index) => {
       const points = [route.start, route.bait, route.end].map(([x, y, z]) => new THREE.Vector3(x, y + 0.12, z));
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(points),
-        new THREE.LineDashedMaterial({ color: routeColors[index % routeColors.length], dashSize: 0.35, gapSize: 0.18 }),
+      const line = fatLines(
+        strip(points),
+        fatLineMaterial({ color: routeColors[index % routeColors.length], width: 3, dashed: { dashSize: 0.35, gapSize: 0.18 } }),
       );
-      line.computeLineDistances();
       line.renderOrder = 1000;
       ratRouteLines.add(line);
     });
@@ -531,19 +533,8 @@ export const Game = async ({
   /** Placement index drawn by each arrow; a new, uncommitted force uses placements.length. */
   const arrowIndices: number[] = [];
 
-  // The plane the pointer moves across while aiming, drawn as a faint polar grid.
-  const makeGuide = (color: number) => {
-    const guide = new THREE.PolarGridHelper(MAX_ARROW_LENGTH, 16, 3, 64, color, color);
-    for (const material of [guide.material].flat()) {
-      Object.assign(material, { transparent: true, opacity: 0.35, depthTest: false, depthWrite: false });
-    }
-    guide.renderOrder = 1999;
-    guide.visible = false;
-    scene.add(guide);
-    return guide;
-  };
-  const flatGuide = makeGuide(0x4dd0e1);
-  const heightGuide = makeGuide(0xff80ab);
+  // Guides for the plane a force is being aimed across, matching the snapping.
+  const aimGuides = new AimGuides(scene, forwardYaw);
 
   /** The placements as they'd be if the drag in progress were committed now. */
   const draft = (): Placement[] => {
@@ -569,6 +560,7 @@ export const Game = async ({
     arrowIndices.length = 0;
     forces.forEach(({ placement, index }, i) => {
       arrows[i].set(worldPointOf(placement.target, placement.localPoint), new THREE.Vector3(...placement.vector));
+      if (iso) arrows[i].setView(iso.metresPerPixel, iso.camera);
       arrows[i].setState({ selected: index === selected || (drag !== null && (drag.index ?? placements.length) === index) });
       arrowIndices.push(index);
     });
@@ -594,13 +586,7 @@ export const Game = async ({
 
   function updateGuides() {
     const aim = drag?.kind === "aim" ? drag.aim : null;
-    flatGuide.visible = aim?.currentMode === "horizontal";
-    heightGuide.visible = aim?.currentMode === "vertical";
-    if (!aim) return;
-    const tip = aim.tip();
-    flatGuide.position.set(aim.origin.x, tip.y, aim.origin.z);
-    heightGuide.position.set(tip.x, aim.origin.y, tip.z);
-    heightGuide.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), aim.dragPlane.normal);
+    aimGuides.update(aim, aim && aimVector(aim));
   }
 
   // --- HUD --------------------------------------------------------------------
@@ -644,11 +630,19 @@ export const Game = async ({
   const hint = () => {
     if (running && run?.finished) return "Run over · Space to reset and try again";
     if (running) return "Drag to orbit · scroll to zoom · Space to reset and try again";
-    if (drag?.kind === "aim") return "Drag to aim across the floor · hold Shift to change height · hold Alt to aim without snapping";
+    if (drag?.kind === "aim") {
+      const hints: Record<AimMode, string> = {
+        create: "Drag to aim, further out for more strength · hold Alt to aim without snapping",
+        heading: "Drag round to turn the force",
+        tilt: "Drag up or down to tilt the force",
+        length: "Drag along the arrow for more or less strength",
+      };
+      return hints[drag.mode];
+    }
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
     const current = selected !== null ? placements[selected] : null;
     if (current?.kind === "force") {
-      return "Drag the head to re-aim · drag the base to move it · scroll over the arrow or [ ] for strength · Delete to remove";
+      return "Drag the white arrows for strength · the blue arrows to turn · the pink arrows to tilt · the base to move it · Delete to remove";
     }
     if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
     if (current?.kind === "mine") return "Delete to remove this mine · Esc to deselect";
@@ -665,13 +659,17 @@ export const Game = async ({
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   const queryFilter = b3.b3DefaultQueryFilter();
-  const modifiers = { shift: false, alt: false };
+  const modifiers = { alt: false };
   const pointer = { x: 0, y: 0 };
 
+  // Fingers need bigger targets than a mouse pointer.
+  let pointerType = "mouse";
+  const pickPixels = () => (pointerType === "touch" ? 24 : 12);
+
   const setPointer = (event: MouseEvent) => {
+    if (event instanceof PointerEvent) pointerType = event.pointerType;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
-    modifiers.shift = event.shiftKey;
     modifiers.alt = event.altKey;
     const rect = renderer.domElement.getBoundingClientRect();
     pointerNdc.set(
@@ -702,7 +700,7 @@ export const Game = async ({
     if (!forceArrows.visible) return null;
     let best: { index: number; part: ArrowPart; distance: number } | null = null;
     arrows.forEach((arrow, i) => {
-      const hit = arrow.hitTest(raycaster);
+      const hit = arrow.hitTest(raycaster, pickPixels());
       if (hit && (!best || hit.distance < best.distance)) best = { index: arrowIndices[i], ...hit };
     });
     return best as { index: number; part: ArrowPart; distance: number } | null;
@@ -752,7 +750,8 @@ export const Game = async ({
   // slides the base point across bodies while keeping the vector. `index` is
   // the placement being edited, or null for a new force.
   type Drag =
-    | { kind: "aim"; index: number | null; target: BodyRef; localPoint: b3Vec3; aim: Aim }
+    // `mode`: which part of the force the drag changes (see AimMode).
+    | { kind: "aim"; index: number | null; target: BodyRef; localPoint: b3Vec3; aim: Aim; mode: AimMode }
     | { kind: "move"; index: number; target: BodyRef; localPoint: b3Vec3; vector: b3Vec3 };
   let drag: Drag | null = null;
 
@@ -791,7 +790,7 @@ export const Game = async ({
   function updateDrag() {
     if (!drag) return;
     if (drag.kind === "aim") {
-      drag.aim.update(raycaster.ray, modifiers.shift ? "vertical" : "horizontal", activeCamera);
+      drag.aim.update(raycaster.ray, drag.mode, activeCamera);
       const vector = aimVector(drag.aim);
       if (vector.length() >= MIN_ARROW_LENGTH) showAimLabel(vector);
       else aimLabel.style.display = "none";
@@ -847,7 +846,8 @@ export const Game = async ({
   container.addEventListener(
     "pointerdown",
     (event) => {
-      if (event.target !== renderer.domElement || event.button !== 0) return;
+      // Extra fingers are for the camera (pinch and pan), not editing.
+      if (event.target !== renderer.domElement || event.button !== 0 || !event.isPrimary) return;
       pointerDownAt = { x: event.clientX, y: event.clientY };
       pointerDownHandled = false;
       if (running) return;
@@ -861,8 +861,10 @@ export const Game = async ({
         const force = placements[arrowHit.index] as ForcePlacement;
         const origin = worldPointOf(force.target, force.localPoint);
         const common = { index: arrowHit.index, target: force.target, localPoint: [...force.localPoint] as b3Vec3 };
-        if (arrowHit.part === "head") {
-          startDrag({ kind: "aim", ...common, aim: new Aim(origin, new THREE.Vector3(...force.vector)) });
+        const modes: Partial<Record<ArrowPart, AimMode>> = { head: "length", tilt: "tilt", heading: "heading" };
+        const mode = modes[arrowHit.part];
+        if (mode) {
+          startDrag({ kind: "aim", ...common, aim: new Aim(origin, new THREE.Vector3(...force.vector)), mode });
         } else if (arrowHit.part === "tail") {
           startDrag({ kind: "move", ...common, vector: force.vector });
         }
@@ -877,12 +879,13 @@ export const Game = async ({
       event.stopPropagation();
       const localPoint: b3Vec3 = [0, 0, 0];
       b3.b3Body_GetLocalPoint(localPoint, hit.body, hit.point.toArray());
-      startDrag({ kind: "aim", index: null, target, localPoint, aim: new Aim(hit.point) });
+      startDrag({ kind: "aim", index: null, target, localPoint, aim: new Aim(hit.point), mode: "create" });
     },
     { capture: true },
   );
 
   renderer.domElement.addEventListener("pointermove", (event) => {
+    if (!event.isPrimary) return;
     setPointer(event);
     if (running) return;
     if (drag) {
@@ -892,7 +895,8 @@ export const Game = async ({
 
     const arrowHit = hitArrow();
     let cursor = "";
-    if (arrowHit) cursor = arrowHit.part === "shaft" ? "pointer" : "grab";
+    const cursors: Record<ArrowPart, string> = { shaft: "pointer", tilt: "ns-resize", heading: "grab", head: "grab", tail: "move" };
+    if (arrowHit) cursor = cursors[arrowHit.part];
     else if (tool === "force") {
       const hit = pick();
       if (hit && simulation.refForBody(hit.body)) cursor = "crosshair";
@@ -927,7 +931,7 @@ export const Game = async ({
   });
 
   window.addEventListener("pointerup", (event) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || !event.isPrimary) return;
     const down = pointerDownAt;
     pointerDownAt = null;
 
@@ -1008,8 +1012,7 @@ export const Game = async ({
   const isTyping = (event: KeyboardEvent) => event.target instanceof HTMLInputElement;
 
   const onModifierChange = (event: KeyboardEvent) => {
-    if (isTyping(event) || (event.key !== "Shift" && event.key !== "Alt")) return;
-    modifiers.shift = event.shiftKey;
+    if (isTyping(event) || event.key !== "Alt") return;
     modifiers.alt = event.altKey;
     if (drag) {
       event.preventDefault();
@@ -1129,6 +1132,8 @@ export const Game = async ({
     }
     trajectory.object3d.visible = !running && previewEnabled;
     runTimer.update(running ? run : null);
+    // Keep arrow handles a constant size on screen, facing the edit camera as it zooms and turns.
+    if (!running) for (const arrow of arrows) arrow.setView(iso.metresPerPixel, iso.camera);
     rig.update(Math.min(dt, 100) / 1000);
     iso.update(Math.min(dt, 100) / 1000);
     updateFlashes(Math.min(dt, 100) / 1000);

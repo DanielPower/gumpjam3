@@ -32,8 +32,9 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 
 export type SurfacePicker = (ray: THREE.Ray) => THREE.Vector3 | null;
 
 /**
- * Isometric orthographic camera for the edit phase: left-drag to rotate around
- * the vertical axis, right-drag to pan, scroll to zoom towards the cursor.
+ * Isometric orthographic camera for the edit phase: left-drag (or one finger)
+ * to rotate around the vertical axis, right-drag (or two fingers) to pan,
+ * scroll (or pinch) to zoom towards the cursor.
  * Panning moves the camera in its view plane by exactly the world distance
  * under the pointer, so what you grab stays under the cursor at any zoom level.
  * Rotation pivots on whatever is at the centre of the view.
@@ -49,6 +50,9 @@ export class IsometricCamera {
   /** The camera looks back along this, from the view towards the camera. */
   readonly direction = new THREE.Vector3();
   private drag: { mode: "pan" | "rotate"; x: number; y: number; pivot: THREE.Vector3 } | null = null;
+  /** Fingers on the screen, for two-finger pan and pinch zoom. */
+  private readonly touches = new Map<number, { x: number; y: number }>();
+  private pinch: { x: number; y: number; distance: number } | null = null;
   private glide: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number } | null = null;
 
   constructor(
@@ -67,7 +71,17 @@ export class IsometricCamera {
 
     domElement.addEventListener("contextmenu", (event) => event.preventDefault());
     domElement.addEventListener("pointerdown", (event) => {
-      if (!this.enabled || this.drag) return;
+      if (!this.enabled) return;
+      if (event.pointerType === "touch") {
+        this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (this.touches.size === 2) {
+          // A second finger turns a one-finger rotate into pan and pinch.
+          this.drag = null;
+          this.pinch = this.twoFingers();
+          return;
+        }
+      }
+      if (this.drag || this.pinch) return;
       const mode = event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
       if (!mode) return;
       this.glide = null;
@@ -76,6 +90,14 @@ export class IsometricCamera {
       domElement.setPointerCapture(event.pointerId);
     });
     domElement.addEventListener("pointermove", (event) => {
+      if (this.touches.has(event.pointerId)) this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (this.pinch && this.touches.size >= 2) {
+        const now = this.twoFingers();
+        this.pan(now.x - this.pinch.x, now.y - this.pinch.y);
+        if (this.pinch.distance > 0) this.zoomAt(now.x, now.y, now.distance / this.pinch.distance);
+        this.pinch = now;
+        return;
+      }
       if (!this.drag) return;
       const dx = event.clientX - this.drag.x;
       const dy = event.clientY - this.drag.y;
@@ -85,6 +107,8 @@ export class IsometricCamera {
       else this.rotate(dx, this.drag.pivot);
     });
     const endDrag = (event: PointerEvent) => {
+      this.touches.delete(event.pointerId);
+      if (this.touches.size < 2) this.pinch = null;
       if (!this.drag) return;
       const button = this.drag.mode === "pan" ? PAN_BUTTON : ROTATE_BUTTON;
       if (event.type === "pointerup" && event.button !== button) return;
@@ -102,6 +126,12 @@ export class IsometricCamera {
       },
       { passive: false },
     );
+  }
+
+  /** Where the first two fingers are centred, and how far apart they are. */
+  private twoFingers() {
+    const [a, b] = [...this.touches.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
   }
 
   /** The point at the centre of the view, DISTANCE in front of the camera. */
@@ -163,7 +193,7 @@ export class IsometricCamera {
   }
 
   /** World metres per screen pixel at the current zoom. */
-  private get metresPerPixel() {
+  get metresPerPixel() {
     return (this.camera.top - this.camera.bottom) / this.camera.zoom / Math.max(1, this.domElement.clientHeight);
   }
 

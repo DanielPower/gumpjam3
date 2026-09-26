@@ -343,3 +343,8 @@ body {
   opacity: 0.3;
   cursor: default;
 }
+
+/* The game handles every touch gesture itself (pinch, pan, drags). */
+canvas {
+  touch-action: none;
+}

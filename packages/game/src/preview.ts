@@ -1,6 +1,9 @@
 import type { Box3DModule, b3BodyId, b3Vec3 } from "box3d.js";
 import * as THREE from "three";
+import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import type { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { syncObjectToBody } from "./box3d-three";
+import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 import { createSimulation, TIME_STEP, type Placement } from "@stairs/shared/simulation";
 import type { TrenchBroomMap } from "@stairs/shared/trenchbroom-map";
 
@@ -28,9 +31,9 @@ export function createTrajectoryPreview(
   object3d.name = "Trajectory preview";
 
   const trailMaterials = {
-    head: new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }),
-    pelvis: new THREE.LineBasicMaterial({ color: 0x7fb2ff, transparent: true, opacity: 0.85 }),
-    prop: new THREE.LineBasicMaterial({ color: 0xd9a066, transparent: true, opacity: 0.85 }),
+    head: fatLineMaterial({ color: 0xffffff, opacity: 0.85, width: 3 }),
+    pelvis: fatLineMaterial({ color: 0x7fb2ff, opacity: 0.85, width: 3 }),
+    prop: fatLineMaterial({ color: 0xd9a066, opacity: 0.85, width: 3 }),
   };
   const trails = new THREE.Group();
   object3d.add(trails);
@@ -58,10 +61,10 @@ export function createTrajectoryPreview(
     const simulation = createSimulation(b3, map, placements);
     simulation.applyForces();
 
-    const tracked: [b3BodyId, THREE.LineBasicMaterial][] = [
+    const tracked: [b3BodyId, LineMaterial][] = [
       [simulation.ragdoll[HEAD_BONE], trailMaterials.head],
       [simulation.ragdoll[PELVIS_BONE], trailMaterials.pelvis],
-      ...[...simulation.props.values()].map((body): [b3BodyId, THREE.LineBasicMaterial] => [body, trailMaterials.prop]),
+      ...[...simulation.props.values()].map((body): [b3BodyId, LineMaterial] => [body, trailMaterials.prop]),
     ];
     const points = tracked.map(() => [] as THREE.Vector3[]);
     const p: b3Vec3 = [0, 0, 0];
@@ -78,13 +81,9 @@ export function createTrajectoryPreview(
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ghost[bone]));
     simulation.destroy();
 
-    for (const line of trails.children as THREE.Line[]) line.geometry.dispose();
+    for (const line of trails.children as LineSegments2[]) line.geometry.dispose();
     trails.clear();
-    tracked.forEach(([, material], i) => {
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points[i]), material);
-      line.frustumCulled = false;
-      trails.add(line);
-    });
+    tracked.forEach(([, material], i) => trails.add(fatLines(strip(points[i]), material)));
   };
 
   return { object3d, update };
