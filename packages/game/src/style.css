@@ -200,11 +200,11 @@ body {
   z-index: 101;
 }
 
-/* Panels sit in a column on each side, clear of the hint and buttons below. */
-#left-column,
-#right-column {
+/* Panels sit in a column down the left, clear of the hint and buttons below. */
+#panels {
   position: absolute;
   top: 0.75rem;
+  left: 0.75rem;
   bottom: 7.5rem;
   width: 13.5rem;
   display: flex;
@@ -216,12 +216,10 @@ body {
   pointer-events: none;
 }
 
-#left-column {
-  left: 0.75rem;
-}
-
-#right-column {
-  right: 0.75rem;
+/* The damage and leaderboard panels only show during (and after) a run. */
+.editing #damage,
+.editing #leaderboard {
+  display: none;
 }
 
 #damage,
@@ -255,10 +253,18 @@ body {
   color: white;
 }
 
+/* The total, with the body diagram beside it; its colours show where it hurt. */
+#damage {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  column-gap: 0.5rem;
+}
+
 #damage .damage-figure {
-  display: block;
-  width: 5.625rem;
-  margin: 0.375rem auto 0.5rem;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 2.5rem;
 }
 
 #damage .damage-figure .hit {
@@ -269,16 +275,6 @@ body {
   from {
     fill: white;
   }
-}
-
-#damage .damage-row {
-  display: flex;
-  justify-content: space-between;
-  line-height: 1.5;
-}
-
-#damage .damage-row span:last-child {
-  font-variant-numeric: tabular-nums;
 }
 
 #leaderboard form {
@@ -473,22 +469,18 @@ canvas {
 
 /*
  * Narrow (portrait) screens, e.g. phones held upright: size the UI from the
- * width so it doesn't shrink to nothing, stack every panel down the left (see
- * NARROW_SCREEN in game.ts), and fit the run timer beside them.
+ * width so it doesn't shrink to nothing, narrow the panels, and fit the run
+ * timer beside them.
  */
 @media (max-aspect-ratio: 4/5) {
   html {
     font-size: clamp(11px, min(3.4vw, 1.6vh), 22px);
   }
 
-  #left-column {
+  #panels {
     width: 10.5rem;
     /* Clear of the hint, which may wrap onto a few lines. */
     bottom: 10rem;
-  }
-
-  #right-column {
-    display: none;
   }
 
   #run-timer {
@@ -501,30 +493,6 @@ canvas {
   #hint {
     box-sizing: border-box;
     padding: 0 1rem;
-  }
-}
-
-/*
- * On small screens of either kind the damage panel shrinks to the total with
- * the figure beside it; the figure's colours still show where it hurt.
- */
-@media (max-aspect-ratio: 4/5), (max-height: 500px) {
-  #damage {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: start;
-    column-gap: 0.5rem;
-  }
-
-  #damage .damage-figure {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-    width: 2.5rem;
-    margin: 0;
-  }
-
-  #damage .damage-list {
-    display: none;
   }
 }
 

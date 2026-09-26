@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { type Box3DModule, type b3Vec3 } from "box3d.js";
 import { BODY_PARTS, scoreOf } from "@stairs/shared/damage";
 import { loadLevel } from "@stairs/shared/level";
-import { startRun, type Run } from "@stairs/shared/run";
+import { startRun, type Run, type ScoredHit } from "@stairs/shared/run";
 import {
   BAIT_SURFACE_OFFSET,
   BOX_HALF_EXTENTS,
@@ -41,6 +41,7 @@ import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
 import { inventoryIcon } from "./inventory-icons";
 import { PoseInterpolator } from "./pose-interpolator";
+import { isMuted, playImpacts, setMuted } from "./impact-sounds";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
@@ -60,8 +61,6 @@ const MAX_LOOK_AHEAD = 1;
 const HIT_FLASH_SECONDS = 0.4;
 const LEVEL_IDS = Object.keys(levelSources);
 
-/** Screens this narrow get the portrait layout. Keep in step with style.css. */
-const NARROW_SCREEN = "(max-aspect-ratio: 4/5)";
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait" };
 const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait" };
 
@@ -259,11 +258,10 @@ export const Game = ({
   let run: Run | null = null;
   const noDamage = BODY_PARTS.map(() => 0);
   const flashes = BODY_PARTS.map(() => ({ remaining: 0, strength: 0, color: new THREE.Color() }));
-  const leftColumn = document.createElement("div");
-  leftColumn.id = "left-column";
-  const rightColumn = document.createElement("div");
-  rightColumn.id = "right-column";
-  root.append(leftColumn, rightColumn);
+  // The panels stack down the left, leaving the rest of the screen to the game.
+  const panels = document.createElement("div");
+  panels.id = "panels";
+  root.append(panels);
   const damagePanel = new DamagePanel();
   const levelPicker =
     LEVEL_IDS.length > 1
@@ -277,21 +275,9 @@ export const Game = ({
         )
       : null;
   const leaderboard = leaderboardAvailable ? new LeaderboardPanel(levelId) : null;
-  // Narrow (portrait) screens stack every panel down one side, leaving the
-  // rest of the screen to the game; wider ones split them across both sides.
-  const narrowScreen = window.matchMedia(NARROW_SCREEN);
-  const arrangePanels = () => {
-    const [picker, board] = [levelPicker?.element, leaderboard?.element];
-    if (narrowScreen.matches) {
-      leftColumn.replaceChildren(...[picker, damagePanel.element, board].filter((el) => el !== undefined));
-      rightColumn.replaceChildren();
-    } else {
-      leftColumn.replaceChildren(damagePanel.element);
-      rightColumn.replaceChildren(...[picker, board].filter((el) => el !== undefined));
-    }
-  };
-  arrangePanels();
-  narrowScreen.addEventListener("change", arrangePanels, { signal });
+  // The damage and leaderboard panels are for runs: they appear with one, and
+  // stay until it's reset so its score can be submitted.
+  panels.append(...[levelPicker?.element, damagePanel.element, leaderboard?.element].filter((el) => el !== undefined));
   // The placements the current run started from, for submitting its score.
   let runPlacements: Placement[] = [];
 
@@ -299,8 +285,11 @@ export const Game = ({
   const runTimer = new RunTimer();
   root.appendChild(runTimer.element);
 
+  /** Hits from this frame's physics steps, to sound together once they're done. */
+  const frameHits: ScoredHit[] = [];
   const stepRun = (r: Run) => {
     const hits = r.step();
+    frameHits.push(...hits);
     explosives.explode(simulation.explosions());
     for (const { bone, damage: amount } of hits) {
       const flash = flashes[bone];
@@ -685,6 +674,7 @@ export const Game = ({
     const divider = document.createElement("div");
     divider.className = "divider";
     hudElement.classList.toggle("running", running);
+    root.classList.toggle("editing", !running);
     hudElement.replaceChildren(...offered.map(slot), divider, ...actions);
   }
 
@@ -1107,6 +1097,9 @@ export const Game = ({
         else if (selected !== null) select(null);
         else selectTool(null);
         break;
+      case "KeyM":
+        setMuted(!isMuted());
+        break;
       case "KeyC":
         if (!running && !drag && placements.length) clear();
         break;
@@ -1196,6 +1189,9 @@ export const Game = ({
         interpolator.capture(physicsObjects());
       }
       interpolator.apply(run.finished ? 1 : stepBacklog / TIME_STEP);
+      // Each hit sounds from where it is on screen, left to right.
+      playImpacts(frameHits, (hit) => new THREE.Vector3(...hit.point).project(activeCamera).x);
+      frameHits.length = 0;
     } else {
       stepBacklog = 0;
       if (running && run?.finished) interpolator.apply(1);

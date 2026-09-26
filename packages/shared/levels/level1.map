@@ -883,3 +883,10 @@
 "origin" "304 0 408"
 "angle" "180"
 }
+// entity 2
+{
+"classname" "info_edit_camera"
+"origin" "248 0 344"
+"angle" "45"
+"view" "11"
+}

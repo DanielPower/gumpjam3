@@ -43,20 +43,19 @@ export function hitFlashStrength(damage: number) {
 }
 
 function heatColor(damage: number) {
-  if (damage <= 0) return "#3a3a3a";
+  if (damage <= 0) return "#555";
   const t = Math.min(1, damage / PART_DAMAGE_FOR_MAX_HEAT);
   return `hsl(${Math.round(55 * (1 - t))}, 90%, ${Math.round(55 - 10 * t)}%)`;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** A body diagram shaded by damage, with a per-part breakdown and total. */
+/** The total damage, with a body diagram beside it shaded by where it hurt. */
 export class DamagePanel {
   readonly element = document.createElement("div");
   private readonly title = document.createElement("div");
   private readonly total = document.createElement("div");
   private readonly shapes: SVGElement[] = [];
-  private readonly values: HTMLElement[] = [];
   private readonly shown: number[] = [];
 
   constructor() {
@@ -67,11 +66,6 @@ export class DamagePanel {
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", "0 0 100 196");
     svg.classList.add("damage-figure");
-    const list = document.createElement("div");
-    list.className = "damage-list";
-
-    // List parts from head to toe rather than in bone order.
-    const order = [5, 4, 3, 2, 1, 0, 12, 10, 13, 11, 8, 6, 9, 7];
     DIAGRAM_SHAPES.forEach((shape, bone) => {
       const el = document.createElementNS(SVG_NS, shape.kind);
       for (const [key, value] of Object.entries(shape)) {
@@ -82,18 +76,7 @@ export class DamagePanel {
       svg.appendChild(el);
       this.shapes[bone] = el;
     });
-    for (const bone of order) {
-      const row = document.createElement("div");
-      row.className = "damage-row";
-      const name = document.createElement("span");
-      name.textContent = BODY_PARTS[bone].name;
-      const value = document.createElement("span");
-      row.append(name, value);
-      list.appendChild(row);
-      this.values[bone] = value;
-    }
-
-    this.element.append(this.title, this.total, svg, list);
+    this.element.append(this.title, this.total, svg);
     this.update(BODY_PARTS.map(() => 0), "Damage");
   }
 
@@ -104,7 +87,6 @@ export class DamagePanel {
       const rounded = Math.round(value);
       if (this.shown[bone] === rounded) return;
       this.shown[bone] = rounded;
-      this.values[bone].textContent = rounded.toLocaleString();
       this.shapes[bone].setAttribute("fill", heatColor(value));
     });
   }
