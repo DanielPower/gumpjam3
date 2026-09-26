@@ -11,21 +11,25 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
 COPY packages/game/package.json packages/game/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --filter "@stairs/server..."
+    pnpm install --frozen-lockfile --filter "@stairs/server..." --filter "@stairs/game..."
 
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/server packages/server
+COPY packages/game packages/game
 RUN pnpm --filter @stairs/server typecheck \
     && pnpm --filter @stairs/server test \
     && pnpm --filter @stairs/server build \
     && pnpm --filter @stairs/server deploy --prod /deploy
+# The game, served alongside the API, talking to whichever server it's loaded from.
+RUN VITE_API_URL=/ pnpm --filter @stairs/game build
 
 FROM node:24-slim
 ENV NODE_ENV=production \
     PORT=3000 \
     DATABASE_PATH=/data/scores.db \
-    LEVELS_DIR=/app/levels
+    LEVELS_DIR=/app/levels \
+    GAME_DIR=/app/game
 WORKDIR /app
 
 # The bundle keeps box3d.js external so it can load its .wasm from node_modules.
@@ -33,6 +37,7 @@ COPY --from=build /deploy/package.json ./
 COPY --from=build /deploy/node_modules ./node_modules
 COPY --from=build /deploy/dist ./dist
 COPY --from=build /repo/packages/shared/levels/*.map ./levels/
+COPY --from=build /repo/packages/game/dist ./game
 
 RUN mkdir /data && chown node:node /data
 USER node

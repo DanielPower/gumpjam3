@@ -2,6 +2,7 @@ import type { Box3DModule } from "box3d.js";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
+import { serveStatic } from "@hono/node-server/serve-static";
 import {
   MAX_NAME_LENGTH,
   type ApiError,
@@ -24,6 +25,8 @@ export type AppOptions = {
   scores: ScoreStore;
   /** Allowed CORS origins; "*" allows any. */
   corsOrigin?: string | string[];
+  /** A built copy of the game to serve to browsers, alongside the API. */
+  gameDir?: string;
 };
 
 /** Collapse whitespace and drop control characters; null if nothing is left. */
@@ -33,7 +36,7 @@ function cleanName(value: unknown): string | null {
   return name.length > 0 && name.length <= MAX_NAME_LENGTH ? name : null;
 }
 
-export function createApp({ b3, levels, scores, corsOrigin = "*" }: AppOptions) {
+export function createApp({ b3, levels, scores, corsOrigin = "*", gameDir }: AppOptions) {
   const app = new Hono();
   app.use("*", cors({ origin: corsOrigin }));
 
@@ -93,6 +96,21 @@ export function createApp({ b3, levels, scores, corsOrigin = "*" }: AppOptions) 
     const { id, rank } = scores.add({ level: levelId, name, score, damage, placements, rules: level.rules });
     return c.json<SubmitScoreResponse>({ id, score, rank, damage }, 201);
   });
+
+  // Anything that isn't the API is the game. Its build puts content-hashed
+  // files in assets/, which never change, so browsers can keep them; everything
+  // else (the page itself) is checked for updates each time.
+  if (gameDir) {
+    app.use(
+      "/*",
+      serveStatic({
+        root: gameDir,
+        onFound: (path, c) => {
+          c.header("Cache-Control", /[\\/]assets[\\/]/.test(path) ? "public, max-age=31536000, immutable" : "no-cache");
+        },
+      }),
+    );
+  }
 
   return app;
 }

@@ -6,11 +6,16 @@ import type {
 } from "@stairs/shared/api";
 
 /**
- * The leaderboard server. Set VITE_API_URL for builds; the dev server defaults
- * to a local server. Null when there's no leaderboard to talk to.
+ * The leaderboard server. Set VITE_API_URL for builds: a URL, or "/" for the
+ * server the game itself was loaded from. The dev server defaults to a local
+ * server. Null when there's no leaderboard to talk to.
  */
-const API_URL: string | null =
-  import.meta.env.VITE_API_URL?.replace(/\/+$/, "") || (import.meta.env.DEV ? "http://localhost:3000" : null);
+const configuredUrl = import.meta.env.VITE_API_URL?.trim();
+const API_URL: string | null = configuredUrl
+  ? configuredUrl.replace(/\/+$/, "")
+  : import.meta.env.DEV
+    ? "http://localhost:3000"
+    : null;
 
 export const leaderboardAvailable = API_URL !== null;
 

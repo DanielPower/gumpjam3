@@ -97,3 +97,28 @@ describe("GET /levels/:level/scores", () => {
     assert.ok(scores[0].score > scores[1].score);
   });
 });
+
+test("the server serves the game to browsers, alongside the API", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const gameDir = mkdtempSync(join(tmpdir(), "stairs-game-"));
+  mkdirSync(join(gameDir, "assets"));
+  writeFileSync(join(gameDir, "index.html"), "<!doctype html><title>Stairs</title>");
+  writeFileSync(join(gameDir, "assets", "index-abc123.js"), "console.log('game')");
+  const app = createApp({ b3, levels: loadLevels(levelsDir), scores: openScoreStore(":memory:"), gameDir });
+
+  const page = await app.request("/");
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<title>Stairs<\/title>/);
+  assert.equal(page.headers.get("Cache-Control"), "no-cache");
+
+  const script = await app.request("/assets/index-abc123.js");
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get("Cache-Control") ?? "", /immutable/);
+
+  // The API still answers, and missing files are still missing.
+  assert.equal((await app.request("/levels/level1/scores")).status, 200);
+  assert.equal((await app.request("/nope.js")).status, 404);
+  assert.equal((await app.request("/../package.json")).status, 404);
+});

@@ -5,3 +5,4 @@
 .github
 .itch
 packages/shared/levels/autosave
+**/.env.local
