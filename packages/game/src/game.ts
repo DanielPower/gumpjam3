@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { type Box3DModule, type b3Vec3 } from "box3d.js";
-import { BODY_PARTS } from "@stairs/shared/damage";
+import { BODY_PARTS, scoreOf } from "@stairs/shared/damage";
 import { loadLevel } from "@stairs/shared/level";
 import { startRun, type Run } from "@stairs/shared/run";
 import {
@@ -8,7 +8,6 @@ import {
   createSimulation,
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
-  TIME_STEP,
   VELOCITY_PER_METER,
   type BodyRef,
   type ForcePlacement,
@@ -30,6 +29,9 @@ import { Aim, describeAim, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { createMapObject3D } from "./map-object";
 import { createTrajectoryPreview } from "./preview";
+import { leaderboardAvailable } from "./api";
+import { LeaderboardPanel } from "./leaderboard-panel";
+import { RunTimer } from "./run-timer";
 
 const FIELD_OF_VIEW = 75;
 const CLIP_NEAR = 0.1;
@@ -46,6 +48,7 @@ const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
 /** How long a body part glows after taking a hit. */
 const HIT_FLASH_SECONDS = 0.4;
+const LEVEL_ID = "level1";
 
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
 const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box" };
@@ -184,14 +187,19 @@ export const Game = async ({
   let run: Run | null = null;
   const noDamage = BODY_PARTS.map(() => 0);
   const flashes = BODY_PARTS.map(() => ({ remaining: 0, strength: 0, color: new THREE.Color() }));
+  const sidebar = document.createElement("div");
+  sidebar.id = "sidebar";
+  container.appendChild(sidebar);
   const damagePanel = new DamagePanel();
-  container.appendChild(damagePanel.element);
+  sidebar.appendChild(damagePanel.element);
+  const leaderboard = leaderboardAvailable ? new LeaderboardPanel(LEVEL_ID) : null;
+  if (leaderboard) sidebar.appendChild(leaderboard.element);
+  // The placements the current run started from, for submitting its score.
+  let runPlacements: Placement[] = [];
 
-  const runTitle = (r: Run) => {
-    if (r.finished) return "Final score";
-    const secondsLeft = Math.ceil((r.totalSteps - r.stepsTaken) * TIME_STEP);
-    return `Damage · ${secondsLeft}s left`;
-  };
+  const runTitle = (r: Run) => (r.finished ? "Final score" : "Damage");
+  const runTimer = new RunTimer();
+  container.appendChild(runTimer.element);
 
   const stepRun = (r: Run) => {
     for (const { bone, damage: amount } of r.step()) {
@@ -206,6 +214,7 @@ export const Game = async ({
       damagePanel.flash(bone);
     }
     damagePanel.update(r.damage, runTitle(r));
+    if (r.finished) leaderboard?.offerSubmission(runPlacements, scoreOf(r.damage));
   };
 
   const updateFlashes = (dt: number) => {
@@ -367,6 +376,7 @@ export const Game = async ({
     running = false;
     for (const flash of flashes) flash.remaining = 0;
     damagePanel.update(run?.damage ?? noDamage, "Last run");
+    leaderboard?.withdraw();
     rig.follow(null);
     if (setupView) rig.glideTo(setupView);
   };
@@ -378,7 +388,8 @@ export const Game = async ({
     running = true;
     tool = null;
     selected = null;
-    run = startRun(simulation, level.runSteps);
+    runPlacements = placements;
+    run = startRun(simulation, level.runLimits);
     damagePanel.update(run.damage, runTitle(run));
     boxPreview.visible = false;
     refreshForces();
@@ -805,8 +816,11 @@ export const Game = async ({
     { capture: true, passive: false },
   );
 
+  // Keys typed into a text field (e.g. the leaderboard name) aren't game controls.
+  const isTyping = (event: KeyboardEvent) => event.target instanceof HTMLInputElement;
+
   const onModifierChange = (event: KeyboardEvent) => {
-    if (event.key !== "Shift" && event.key !== "Alt") return;
+    if (isTyping(event) || (event.key !== "Shift" && event.key !== "Alt")) return;
     modifiers.shift = event.shiftKey;
     modifiers.alt = event.altKey;
     if (drag) {
@@ -817,6 +831,10 @@ export const Game = async ({
   document.addEventListener("keyup", onModifierChange);
 
   document.addEventListener("keydown", (event) => {
+    if (isTyping(event)) {
+      if (event.code === "Escape") (event.target as HTMLElement).blur();
+      return;
+    }
     onModifierChange(event);
     if (event.repeat) return;
     switch (event.code) {
@@ -900,6 +918,7 @@ export const Game = async ({
       previewDirty = false;
     }
     trajectory.object3d.visible = !running && previewEnabled;
+    runTimer.update(running ? run : null);
     rig.update(Math.min(dt, 100) / 1000);
     updateFlashes(Math.min(dt, 100) / 1000);
 

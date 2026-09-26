@@ -1,16 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { LeaderboardEntry } from "@stairs/shared/api";
 import type { Placement } from "@stairs/shared/simulation";
-
-export type ScoreEntry = { rank: number; name: string; score: number; createdAt: string };
 
 export type ScoreStore = {
   add(entry: { level: string; name: string; score: number; damage: number[]; placements: Placement[] }): {
     id: number;
     rank: number;
   };
-  top(level: string, limit: number): ScoreEntry[];
+  top(level: string, limit: number): LeaderboardEntry[];
   close(): void;
 };
 
@@ -38,7 +37,7 @@ export function openScoreStore(path: string): ScoreStore {
   // Ties share a rank.
   const rankOf = db.prepare("SELECT COUNT(*) + 1 AS rank FROM scores WHERE level = ? AND score > ?");
   const top = db.prepare(`
-    SELECT name, score, created_at AS createdAt,
+    SELECT id, name, score, created_at AS createdAt,
            RANK() OVER (ORDER BY score DESC) AS rank
     FROM scores WHERE level = ?
     ORDER BY score DESC, id
@@ -51,7 +50,7 @@ export function openScoreStore(path: string): ScoreStore {
       const { rank } = rankOf.get(level, score) as { rank: number };
       return { id: Number(lastInsertRowid), rank };
     },
-    top: (level, limit) => top.all(level, limit) as ScoreEntry[],
+    top: (level, limit) => top.all(level, limit) as LeaderboardEntry[],
     close: () => db.close(),
   };
 }

@@ -1,23 +1,25 @@
 import * as THREE from "three";
+import type { RunLimits } from "./run";
 import { TIME_STEP, type Inventory } from "./simulation";
 import { mapBrushGeometry, parseTrenchBroomMap, type TrenchBroomMap } from "./trenchbroom-map";
 
 const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1 };
-const DEFAULT_RUN_SECONDS = 10;
+const DEFAULT_QUIET_SECONDS = 3;
+/** Hard limit on a run, so a loop that keeps dealing damage can't go forever. */
 const MAX_RUN_SECONDS = 60;
 
 export type Level = {
   map: TrenchBroomMap;
   inventory: Inventory;
-  /** Every run lasts exactly this many physics steps, so scores are comparable. */
-  runSteps: number;
+  /** When runs end. Every client and the server use the same limits. */
+  runLimits: RunLimits;
   /** World-space bounds of the level geometry. */
   bounds: THREE.Box3;
 };
 
 /**
  * Parse a level. Settings come from worldspawn keys, e.g. "inventory_force" "3",
- * "inventory_box" "1", "run_seconds" "10".
+ * "inventory_box" "1", "run_quiet_seconds" "3".
  */
 export function loadLevel(source: string): Level {
   const map = parseTrenchBroomMap(source);
@@ -29,11 +31,15 @@ export function loadLevel(source: string): Level {
     if (Number.isInteger(value) && value >= 0) inventory[kind] = value;
   }
 
-  let runSeconds = Number(worldspawn.run_seconds ?? DEFAULT_RUN_SECONDS);
-  if (!(runSeconds > 0 && runSeconds <= MAX_RUN_SECONDS)) runSeconds = DEFAULT_RUN_SECONDS;
+  let quietSeconds = Number(worldspawn.run_quiet_seconds ?? DEFAULT_QUIET_SECONDS);
+  if (!(quietSeconds > 0 && quietSeconds <= MAX_RUN_SECONDS)) quietSeconds = DEFAULT_QUIET_SECONDS;
+  const runLimits: RunLimits = {
+    quietSteps: Math.round(quietSeconds / TIME_STEP),
+    maxSteps: Math.round(MAX_RUN_SECONDS / TIME_STEP),
+  };
 
   const bounds = new THREE.Box3();
   for (const brush of mapBrushGeometry(map)) for (const vertex of brush.vertices) bounds.expandByPoint(vertex);
 
-  return { map, inventory, runSteps: Math.round(runSeconds / TIME_STEP), bounds };
+  return { map, inventory, runLimits, bounds };
 }

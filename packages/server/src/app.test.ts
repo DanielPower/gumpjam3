@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import Box3D, { type Box3DModule } from "box3d.js";
+import type { ApiError, LeaderboardResponse, SubmitScoreResponse } from "@stairs/shared/api";
 import { simulateRun } from "@stairs/shared/run";
 import type { Placement } from "@stairs/shared/simulation";
 import { createApp } from "./app";
@@ -19,8 +20,6 @@ const push: Placement = {
 };
 const restingBox: Placement = { kind: "box", id: 1, position: [10, 12.25, 1] };
 
-type Submitted = { id: number; score: number; rank: number; error?: string };
-type Leaderboard = { scores: { rank: number; name: string; score: number }[] };
 const json = async <T>(res: Response) => (await res.json()) as T;
 
 let b3: Box3DModule;
@@ -44,12 +43,12 @@ describe("POST /levels/:level/scores", () => {
   test("scores a setup by re-running it", async () => {
     const { levels, submit } = setup();
     const level = levels.get("level1")!;
-    const expected = simulateRun(b3, level.map, [push, restingBox], level.runSteps);
+    const expected = simulateRun(b3, level.map, [push, restingBox], level.runLimits);
     assert.ok(expected.score > 0);
 
     const res = await submit({ name: "  Daniel ", placements: [push, restingBox], claimedScore: 1 });
     assert.equal(res.status, 201);
-    const body = await json<Submitted>(res);
+    const body = await json<SubmitScoreResponse>(res);
     assert.equal(body.score, expected.score, "server ignores the claimed score");
     assert.equal(body.rank, 1);
   });
@@ -74,7 +73,7 @@ describe("POST /levels/:level/scores", () => {
     test(`rejects ${what}`, async () => {
       const res = await setup().submit(body);
       assert.equal(res.status, 400);
-      assert.match((await json<{ error: string }>(res)).error, message);
+      assert.match((await json<ApiError>(res)).error, message);
     });
   }
 
@@ -90,7 +89,7 @@ describe("GET /levels/:level/scores", () => {
     await submit({ name: "gentle", placements: [] });
     await submit({ name: "shove", placements: [push] });
     const res = await app.request("/levels/level1/scores?limit=5");
-    const { scores } = await json<Leaderboard>(res);
+    const { scores } = await json<LeaderboardResponse>(res);
     assert.deepEqual(
       scores.map((s) => [s.rank, s.name]),
       [[1, "shove"], [2, "gentle"]],
