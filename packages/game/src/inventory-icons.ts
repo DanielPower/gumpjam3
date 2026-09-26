@@ -1,0 +1,55 @@
+import type { PlacementKind } from "@stairs/shared/simulation";
+
+/**
+ * Hotbar icons for each placeable item, as inline SVG on a 48×48 grid. They're
+ * drawn in the items' in-game colours, from roughly the edit camera's angle,
+ * with a dark outline so they read on the slots' background.
+ */
+const OUTLINE = `stroke="#1b1b1b" stroke-width="2" stroke-linejoin="round"`;
+
+const force = `
+  <defs>
+    <linearGradient id="force-strength" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffe14d"/>
+      <stop offset="1" stop-color="#f2402c"/>
+    </linearGradient>
+  </defs>
+  <path d="M7.5 35 L25 17.5 L20 12.5 L40 8 L35.5 28 L30.5 23 L13 40.5 Z" fill="url(#force-strength)" ${OUTLINE}/>
+  <circle cx="10" cy="38" r="4" fill="#fff" ${OUTLINE}/>`;
+
+const box = `
+  <path d="M24 6 L41 14.5 L24 23 L7 14.5 Z" fill="#d49a5f" ${OUTLINE}/>
+  <path d="M7 14.5 L24 23 L24 42 L7 33.5 Z" fill="#b07a45" ${OUTLINE}/>
+  <path d="M41 14.5 L24 23 L24 42 L41 33.5 Z" fill="#8a5c31" ${OUTLINE}/>
+  <path d="M7 24 L24 32.5 L41 24 M15.5 10.25 L32.5 18.75 M32.5 10.25 L15.5 18.75" fill="none" stroke="#5e3d1f" stroke-width="1.5" opacity="0.7"/>`;
+
+const mine = `
+  <defs>
+    <radialGradient id="mine-glow">
+      <stop offset="0" stop-color="#ff5030" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ff5030" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M5 26 L5 31 A19 8 0 0 0 43 31 L43 26 Z" fill="#2a2e33" ${OUTLINE}/>
+  <ellipse cx="24" cy="26" rx="19" ry="8" fill="#4a5058" ${OUTLINE}/>
+  <ellipse cx="24" cy="26" rx="11" ry="4.5" fill="none" stroke="#2f3439" stroke-width="1.5"/>
+  <circle cx="24" cy="22" r="10" fill="url(#mine-glow)"/>
+  <ellipse cx="24" cy="23" rx="4" ry="3.2" fill="#ff3020" ${OUTLINE}/>
+  <ellipse cx="22.8" cy="22" rx="1.4" ry="1" fill="#ffc0b0"/>`;
+
+const bait = `
+  <path d="M6 30 L38 17 L42 21 L42 34 L10 40 L6 37 Z" fill="#d99a1e" ${OUTLINE}/>
+  <path d="M6 30 L38 17 L42 21 L10 34 Z" fill="#ffd95a" ${OUTLINE}/>
+  <path d="M10 34 L42 21 L42 34 L10 40 Z" fill="#f2bd32" ${OUTLINE}/>
+  <ellipse cx="22" cy="36" rx="2.6" ry="1.9" fill="#b97818"/>
+  <ellipse cx="33" cy="29.5" rx="1.9" ry="2.3" fill="#b97818"/>
+  <ellipse cx="18" cy="29" rx="2.4" ry="1.1" fill="#d99a1e"/>
+  <ellipse cx="29" cy="24.5" rx="1.6" ry="0.8" fill="#d99a1e"/>`;
+
+const ICONS: Record<PlacementKind, string> = { force, box, mine, bait };
+
+export function inventoryIcon(kind: PlacementKind) {
+  const template = document.createElement("template");
+  template.innerHTML = `<svg viewBox="0 0 48 48" aria-hidden="true">${ICONS[kind]}</svg>`;
+  return template.content.firstElementChild as SVGSVGElement;
+}

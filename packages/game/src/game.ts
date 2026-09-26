@@ -38,6 +38,7 @@ import { createTrajectoryPreview } from "./preview";
 import { leaderboardAvailable } from "./api";
 import { LeaderboardPanel } from "./leaderboard-panel";
 import { RunTimer } from "./run-timer";
+import { inventoryIcon } from "./inventory-icons";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
@@ -183,18 +184,13 @@ export const Game = async ({
   scene.add(sun, sun.target);
   scene.add(new THREE.HemisphereLight(0xbddcff, 0x302820, 0.8));
 
-  // --- Placements, history and selection --------------------------------------
+  // --- Placements and selection ----------------------------------------------
 
   let placements: Placement[] = [];
-  const history: Placement[][] = [];
-  // Consecutive commits with the same tag (e.g. scrolling one arrow's strength)
-  // share a single undo step.
-  let historyTag: string | null = null;
   let selected: number | null = null;
   let running = false;
   let tool: PlacementKind | null = null;
   let debugVisible = false;
-  let previewEnabled = true;
   let previewDirty = true;
 
   let simulation: Simulation;
@@ -405,14 +401,12 @@ export const Game = async ({
     refreshForces();
   };
 
-  /** Replace the placements, recording the previous ones for undo. */
-  const commit = (next: Placement[], tag: string | null = null) => {
+  /** Replace the placements. */
+  const commit = (next: Placement[]) => {
     if (JSON.stringify(next) === JSON.stringify(placements)) {
       refreshForces();
       return;
     }
-    if (tag === null || tag !== historyTag) history.push(structuredClone(placements));
-    historyTag = tag;
     placements = next;
     rebuild();
   };
@@ -424,10 +418,10 @@ export const Game = async ({
     if (remaining(placement.kind) <= 0 && tool === placement.kind) selectTool(null);
   };
 
-  const replacePlacement = (index: number, placement: Placement, tag: string | null = null) => {
+  const replacePlacement = (index: number, placement: Placement) => {
     const next = [...placements];
     next[index] = placement;
-    commit(next, tag);
+    commit(next);
   };
 
   /** Remove a placement, along with any forces pushing on it if it's a prop. */
@@ -441,14 +435,6 @@ export const Game = async ({
           !(removed.kind === "box" && p.kind === "force" && p.target.kind === "prop" && p.target.id === removed.id),
       ),
     );
-  };
-
-  const undo = () => {
-    if (running || drag || !history.length) return;
-    placements = history.pop()!;
-    historyTag = null;
-    selected = null;
-    rebuild();
   };
 
   const clear = () => {
@@ -591,41 +577,61 @@ export const Game = async ({
 
   // --- HUD --------------------------------------------------------------------
 
-  function button(label: string, onClick: () => void, options: { active?: boolean; disabled?: boolean } = {}) {
+  /** An action in the toolbar, with its key in the corner like the slots' numbers. */
+  function action(label: string, key: string, onClick: () => void, className = "") {
     const el = document.createElement("button");
-    el.textContent = label;
-    el.disabled = options.disabled ?? false;
-    el.classList.toggle("active", options.active ?? false);
+    el.className = `action ${className}`.trim();
+    el.title = `${label} (${key})`;
+    const keyLabel = document.createElement("span");
+    keyLabel.className = "slot-key";
+    keyLabel.textContent = key;
+    el.append(label, keyLabel);
     el.addEventListener("click", onClick);
     return el;
   }
 
-  function updateHud() {
-    // Only the tools this level offers.
-    const offered = (Object.keys(TOOL_LABELS) as PlacementKind[]).filter((kind) => inventory[kind] > 0);
-    const tools = offered.map((kind) =>
-      button(`${Object.keys(TOOL_LABELS).indexOf(kind) + 1}. ${TOOL_LABELS[kind]} ×${remaining(kind)}`, () => selectTool(kind), {
-        active: tool === kind,
-        disabled: running || remaining(kind) <= 0,
-      }),
-    );
-    hudElement.replaceChildren(
-      ...tools,
-      button("Undo (Z)", undo, { disabled: running || !history.length }),
-      button("Delete (Del)", () => selected !== null && removePlacement(selected), {
-        disabled: running || selected === null,
-      }),
-      button("Clear", clear, { disabled: !placements.length }),
-      button("Preview (V)", togglePreview, { active: previewEnabled, disabled: running }),
-      button(running ? "Reset (Space)" : "Go! (Space)", () => (running ? reset() : play())),
-    );
+  /** A hotbar slot: the item's icon, its number key, and how many are left. */
+  function slot(kind: PlacementKind) {
+    const key = Object.keys(TOOL_LABELS).indexOf(kind) + 1;
+    const left = remaining(kind);
+    const el = document.createElement("button");
+    el.className = "slot";
+    el.title = `${TOOL_LABELS[kind]} (${key})`;
+    el.setAttribute("aria-label", `${TOOL_LABELS[kind]}, ${left} left`);
+    el.classList.toggle("active", tool === kind);
+    el.classList.toggle("empty", left <= 0);
+    el.disabled = running || left <= 0;
+    const keyLabel = document.createElement("span");
+    keyLabel.className = "slot-key";
+    keyLabel.textContent = String(key);
+    const count = document.createElement("span");
+    count.className = "slot-count";
+    count.textContent = String(left);
+    el.append(inventoryIcon(kind), keyLabel, count);
+    el.addEventListener("click", () => selectTool(kind));
+    return el;
   }
 
-  const togglePreview = () => {
-    previewEnabled = !previewEnabled;
-    previewDirty = true;
-    updateHud();
-  };
+  /**
+   * One toolbar: the level's items, then only the actions that can be used
+   * right now. Delete (with something selected) and Clear share a place, so
+   * it stays narrow.
+   */
+  function updateHud() {
+    const offered = (Object.keys(TOOL_LABELS) as PlacementKind[]).filter((kind) => inventory[kind] > 0);
+    const actions: HTMLButtonElement[] = [];
+    if (!running && selected !== null) {
+      const index = selected;
+      actions.push(action("Delete", "Del", () => removePlacement(index)));
+    } else if (!running && placements.length) {
+      actions.push(action("Clear", "C", clear));
+    }
+    actions.push(running ? action("Reset", "Space", reset, "reset") : action("Go!", "Space", play, "go"));
+    const divider = document.createElement("div");
+    divider.className = "divider";
+    hudElement.classList.toggle("running", running);
+    hudElement.replaceChildren(...offered.map(slot), divider, ...actions);
+  }
 
   const hint = () => {
     if (running && run?.finished) return "Run over · Space to reset and try again";
@@ -651,7 +657,7 @@ export const Game = async ({
     if (tool === "box") return "Click a surface to place a box";
     if (tool === "mine") return "Click a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives";
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
-    return "Choose a tool to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
+    return "Choose an item to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
   };
 
   // --- Picking ----------------------------------------------------------------
@@ -830,7 +836,7 @@ export const Game = async ({
     if (placement.kind !== "force") return;
     const vector = new THREE.Vector3(...placement.vector);
     vector.setLength(THREE.MathUtils.clamp(vector.length() * factor, MIN_ARROW_LENGTH * 2, MAX_ARROW_LENGTH));
-    replacePlacement(selected, { ...placement, vector: vector.toArray() }, `strength:${selected}`);
+    replacePlacement(selected, { ...placement, vector: vector.toArray() });
     showAimLabel(vector, true);
   };
 
@@ -1039,8 +1045,8 @@ export const Game = async ({
         else if (selected !== null) select(null);
         else selectTool(null);
         break;
-      case "KeyZ":
-        undo();
+      case "KeyC":
+        if (!running && !drag && placements.length) clear();
         break;
       case "KeyF":
         if (!running) iso.centerOn(ragdollMotion().center);
@@ -1052,9 +1058,6 @@ export const Game = async ({
       case "BracketLeft":
       case "BracketRight":
         if (!running && !drag) adjustStrength(event.code === "BracketRight" ? STRENGTH_STEP : 1 / STRENGTH_STEP);
-        break;
-      case "KeyV":
-        togglePreview();
         break;
       case "KeyP":
         debugVisible = !debugVisible;
@@ -1126,11 +1129,11 @@ export const Game = async ({
     if (running) {
       const { center, velocity } = ragdollMotion();
       rig.follow(center.add(velocity.multiplyScalar(LOOK_AHEAD_SECONDS).clampLength(0, MAX_LOOK_AHEAD)));
-    } else if (previewEnabled && previewDirty) {
+    } else if (previewDirty) {
       trajectory.update(draft());
       previewDirty = false;
     }
-    trajectory.object3d.visible = !running && previewEnabled;
+    trajectory.object3d.visible = !running;
     runTimer.update(running ? run : null);
     // Keep arrow handles a constant size on screen, facing the edit camera as it zooms and turns.
     if (!running) for (const arrow of arrows) arrow.setView(iso.metresPerPixel, iso.camera);
