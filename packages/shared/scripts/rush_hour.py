@@ -66,6 +66,7 @@ for s in (1, -1):
     world.append(box(FAR - 0.2, EDGE + 0.2, 3, 3.5, lz0, lz1, "yellow"))
 
 entity({"classname": "worldspawn", "message": "Rush Hour", "inventory_force": "3", "inventory_box": "2",
+        "inventory_rope": "2", "inventory_thruster": "2",
         "sky": "#9ecbf2"}, world)
 
 # --- merry-go-round, beside the stairs ---------------------------------------

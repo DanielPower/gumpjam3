@@ -883,7 +883,9 @@ export const Game = ({
     }
     if (drag?.kind === "place" && drag.moving) {
       const thing = TOOL_LABELS[drag.candidate.kind].toLowerCase();
-      return drag.valid ? `Drag to move the ${thing}` : `The ${thing} can't go here · let go to put it back`;
+      if (drag.valid) return `Drag to move the ${thing}`;
+      const reason = drag.problem ? drag.problem[0].toUpperCase() + drag.problem.slice(1) : `The ${thing} can't go here`;
+      return `${reason} · let go to put it back`;
     }
     const current = selected !== null ? placements[selected] : null;
     if (current?.kind === "force") {
@@ -1019,7 +1021,8 @@ export const Game = ({
     // `mode`: which part of the force the drag changes (see AimMode).
     | { kind: "aim"; index: number | null; target: BodyRef; localPoint: b3Vec3; aim: Aim; mode: AimMode }
     | { kind: "move"; index: number; target: BodyRef; localPoint: b3Vec3; vector: b3Vec3 }
-    | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean }
+    // `problem` says why it can't go there, when that's not obvious (e.g. a rope would be too long).
+    | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean; problem?: string }
     // Tying a rope from `a` to wherever the pointer is (`b`), if it can go there.
     | { kind: "rope"; a: RopeEnd; b: RopeEnd | null; problem: string | null };
   type MovablePlacement = Exclude<Placement, ForcePlacement | RopePlacement | ThrusterPlacement>;
@@ -1101,6 +1104,19 @@ export const Game = ({
       b3.b3Body_SetTransform(body, candidate.position, [0, 0, 0, 1]);
     } else if (candidate.kind === "bait") {
       baitMeshes.get(candidate.id)?.position.set(...candidate.position);
+    }
+    // Ropes tied to it come along, so they must still be short enough and
+    // clear of things from here. (Checked with the body already moved.)
+    d.problem = undefined;
+    if (d.valid) {
+      const ropeProblem = ropePlacements()
+        .filter(({ placement: rope }) => [rope.a, rope.b].some((end) => tiedTo(end.target, candidate)))
+        .map(({ placement: rope }) => simulation.ropeProblem(rope.a, rope.b))
+        .find((problem) => problem !== null);
+      if (ropeProblem) {
+        d.valid = false;
+        d.problem = ropeProblem;
+      }
     }
     syncVisuals();
     boxPreview.visible = candidate.kind === "box" && !d.valid;

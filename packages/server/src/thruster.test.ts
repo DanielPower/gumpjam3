@@ -31,11 +31,13 @@ test("a thruster pushes into what it's stuck on, and runs out after a while", ()
 });
 
 test("thrusters go on things that exist, within reach, facing a unit normal", () => {
-  const stairs = levels.get("level1")!;
+  // The Stairs, as if it offered thrusters (it doesn't, to keep the first level simple).
+  const level1 = levels.get("level1")!;
+  const stairs = { ...level1, inventory: { ...level1.inventory, thruster: 2 } };
   assert.doesNotThrow(() => validatePlacements(b3, stairs, [box, thruster]));
   const withThruster = (changes: object) => [box, { ...thruster, ...changes } as Placement];
   assert.throws(() => validatePlacements(b3, stairs, withThruster({ target: { kind: "prop", id: 9 } })), /missing box 9/);
   assert.throws(() => validatePlacements(b3, stairs, withThruster({ localPoint: [0, -2, 0] })), /too far from its body/);
   assert.throws(() => validatePlacements(b3, stairs, withThruster({ localNormal: [0, -2, 0] })), /unit vector/);
-  assert.throws(() => validatePlacements(b3, levels.get("level3")!, [{ kind: "box", id: 1, position: [12.5, 7.75, 1] }, thruster]), /allows 0 thruster/);
+  assert.throws(() => validatePlacements(b3, level1, [box, thruster]), /allows 0 thruster/);
 });

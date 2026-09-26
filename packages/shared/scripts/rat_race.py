@@ -110,7 +110,8 @@ for x in (-11.5, -5.5, 0.0):
 
 entity({
     "classname": "worldspawn", "message": "Rat Race", "sky": "#15272b", "sun": "80 120 300",
-    "inventory_force": "2", "inventory_box": "0", "inventory_mine": "0", "inventory_bait": "2",
+    "inventory_force": "2", "inventory_box": "2", "inventory_mine": "2", "inventory_bait": "2",
+    "inventory_rope": "2", "inventory_thruster": "2",
     "run_quiet_seconds": "4",
 }, world)
 

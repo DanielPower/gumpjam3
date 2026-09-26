@@ -862,7 +862,12 @@ export function createSimulation(
 
     // It starts straight, so it mustn't pass through anything on the way,
     // except what it's tied to (and other ropes, which just push aside).
-    const tiedTo = new Set([a.target, b.target].flatMap((target) => (target.kind === "level" ? [] : [bodyKey(resolve(target))])));
+    // (The ragdoll counts as one thing: a rope tied to it can start across its other parts.)
+    const tiedTo = new Set(
+      [a.target, b.target].flatMap((target) =>
+        target.kind === "level" ? [] : target.kind === "ragdoll" ? ragdoll.map(bodyKey) : [bodyKey(resolve(target))],
+      ),
+    );
     const along = new THREE.Vector3(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]).normalize();
     // Clear of the surfaces its ends are tied to.
     const clearance = ROPE_RADIUS + 0.05;

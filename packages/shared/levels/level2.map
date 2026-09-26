@@ -7,6 +7,8 @@
 "message" "Rush Hour"
 "inventory_force" "3"
 "inventory_box" "2"
+"inventory_rope" "2"
+"inventory_thruster" "2"
 "sky" "#9ecbf2"
 // brush 0
 {
