@@ -1,7 +1,5 @@
 import * as THREE from "three";
-
-export const MAX_ARROW_LENGTH = 1.5;
-export const MIN_ARROW_LENGTH = 0.05;
+import { MAX_ARROW_LENGTH, MIN_ARROW_LENGTH } from "@stairs/shared/simulation";
 
 /** Horizontal drags aim across the floor; vertical drags only change height. */
 export type AimMode = "horizontal" | "vertical";

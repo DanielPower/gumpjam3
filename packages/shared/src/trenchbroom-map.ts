@@ -51,7 +51,8 @@ type Plane = {
   distance: number;
 };
 
-type BrushGeometry = {
+/** A convex brush in world space: vertices, and faces as vertex index loops. */
+export type BrushGeometry = {
   vertices: THREE.Vector3[];
   faces: number[][];
 };
@@ -295,47 +296,12 @@ function buildBrushGeometry(brush: TrenchBroomBrush, scale: number): BrushGeomet
   };
 }
 
-function allBrushGeometry(map: TrenchBroomMap, scale: number): BrushGeometry[] {
+/** World-space geometry for every brush in the map. */
+export function mapBrushGeometry(map: TrenchBroomMap, options: MapBuildOptions = {}): BrushGeometry[] {
+  const scale = options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS;
   return map.entities.flatMap((entity) =>
     entity.brushes.map((brush) => buildBrushGeometry(brush, scale)),
   );
-}
-
-/** Build a renderable Three.js group containing one mesh per convex brush. */
-export function createMapObject3D(
-  map: TrenchBroomMap,
-  options: MapBuildOptions = {},
-): THREE.Group {
-  const scale = options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS;
-  const group = new THREE.Group();
-  group.name = "TrenchBroom map";
-
-  for (const [brushIndex, brush] of allBrushGeometry(map, scale).entries()) {
-    const positions: number[] = [];
-    for (const face of brush.faces) {
-      for (let index = 1; index < face.length - 1; index++) {
-        for (const vertexIndex of [face[0], face[index], face[index + 1]]) {
-          positions.push(...brush.vertices[vertexIndex].toArray());
-        }
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geometry.computeVertexNormals();
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x78909c,
-      roughness: 0.85,
-      metalness: 0,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `Map brush ${brushIndex}`;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  }
-
-  return group;
 }
 
 /** Build static Box3D convex-hull collision shapes for every map brush. */
@@ -345,12 +311,11 @@ export function createMapCollisionObjects(
   map: TrenchBroomMap,
   options: MapBuildOptions = {},
 ): MapCollisionObjects {
-  const scale = options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS;
   const body = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
   b3.b3Body_SetName(body, "TrenchBroom map");
   const shapes: b3ShapeId[] = [];
 
-  for (const brush of allBrushGeometry(map, scale)) {
+  for (const brush of mapBrushGeometry(map, options)) {
     const points = brush.vertices.flatMap((point) => point.toArray());
     const hull = b3.b3CreateHull(points);
     if (hull === null) throw new Error("Box3D could not create a hull for a map brush");

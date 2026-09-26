@@ -1,5 +1,23 @@
 import * as THREE from "three";
-import { type Box3DModule, type b3ShapeId, type b3Vec3 } from "box3d.js";
+import { type Box3DModule, type b3Vec3 } from "box3d.js";
+import { BODY_PARTS } from "@stairs/shared/damage";
+import { loadLevel } from "@stairs/shared/level";
+import { startRun, type Run } from "@stairs/shared/run";
+import {
+  BOX_HALF_EXTENTS,
+  createSimulation,
+  MAX_ARROW_LENGTH,
+  MIN_ARROW_LENGTH,
+  TIME_STEP,
+  VELOCITY_PER_METER,
+  type BodyRef,
+  type ForcePlacement,
+  type Placement,
+  type PlacementKind,
+  type Simulation,
+} from "@stairs/shared/simulation";
+import { getEntityWorldOrigin, getEntityWorldYaw } from "@stairs/shared/trenchbroom-map";
+import level1Source from "virtual:level/level1";
 import {
   createPhysicsDebugRenderer,
   createShapeDebugGeometry,
@@ -7,29 +25,11 @@ import {
   type PhysicsDebugRenderer,
 } from "./box3d-three";
 import { CameraRig, type CameraView } from "./camera-rig";
-import { BODY_PARTS, DamagePanel, damageForHit, hitFlashColor, hitFlashStrength } from "./damage";
-import { Aim, describeAim, MAX_ARROW_LENGTH, MIN_ARROW_LENGTH, snapAim } from "./force-aim";
+import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
+import { Aim, describeAim, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
+import { createMapObject3D } from "./map-object";
 import { createTrajectoryPreview } from "./preview";
-import {
-  BOX_HALF_EXTENTS,
-  createSimulation,
-  VELOCITY_PER_METER,
-  type BodyRef,
-  type ForcePlacement,
-  type Inventory,
-  type Placement,
-  type PlacementKind,
-  type Simulation,
-} from "./simulation";
-
-import {
-  createMapObject3D,
-  getEntityWorldOrigin,
-  getEntityWorldYaw,
-  parseTrenchBroomMap,
-  type TrenchBroomMap,
-} from "./trenchbroom-map";
 
 const FIELD_OF_VIEW = 75;
 const CLIP_NEAR = 0.1;
@@ -46,21 +46,9 @@ const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
 /** How long a body part glows after taking a hit. */
 const HIT_FLASH_SECONDS = 0.4;
-const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1 };
 
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
 const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box" };
-
-/** Read the level's inventory from worldspawn keys, e.g. "inventory_force" "3". */
-function readInventory(map: TrenchBroomMap): Inventory {
-  const worldspawn = map.entities.find((e) => e.properties.classname === "worldspawn");
-  const inventory = { ...DEFAULT_INVENTORY };
-  for (const kind of Object.keys(inventory) as PlacementKind[]) {
-    const value = Number(worldspawn?.properties[`inventory_${kind}`]);
-    if (Number.isInteger(value) && value >= 0) inventory[kind] = value;
-  }
-  return inventory;
-}
 
 function disposeObject(object: THREE.Object3D) {
   object.removeFromParent();
@@ -81,15 +69,8 @@ export const Game = async ({
   b3: Box3DModule;
   container: HTMLElement;
 }) => {
-  const levelUrl = new URL("./assets/level1.map", import.meta.url);
-  const levelResponse = await fetch(levelUrl);
-  if (!levelResponse.ok) {
-    throw new Error(
-      `Failed to load map '${levelUrl}': ${levelResponse.status} ${levelResponse.statusText}`,
-    );
-  }
-  const map = parseTrenchBroomMap(await levelResponse.text());
-  const inventory = readInventory(map);
+  const level = loadLevel(level1Source);
+  const { map, inventory } = level;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a1a1a);
@@ -199,15 +180,21 @@ export const Game = async ({
 
   // --- Damage -------------------------------------------------------------------
 
-  const damage = BODY_PARTS.map(() => 0);
+  // The scored run in progress, or the last one after a reset.
+  let run: Run | null = null;
+  const noDamage = BODY_PARTS.map(() => 0);
   const flashes = BODY_PARTS.map(() => ({ remaining: 0, strength: 0, color: new THREE.Color() }));
   const damagePanel = new DamagePanel();
   container.appendChild(damagePanel.element);
 
-  const recordHits = () => {
-    for (const { bone, speed } of simulation.ragdollHits()) {
-      const amount = damageForHit(bone, speed);
-      damage[bone] += amount;
+  const runTitle = (r: Run) => {
+    if (r.finished) return "Final score";
+    const secondsLeft = Math.ceil((r.totalSteps - r.stepsTaken) * TIME_STEP);
+    return `Damage · ${secondsLeft}s left`;
+  };
+
+  const stepRun = (r: Run) => {
+    for (const { bone, damage: amount } of r.step()) {
       const flash = flashes[bone];
       const strength = hitFlashStrength(amount);
       // Don't let a glancing blow cut short the glow from a bigger one.
@@ -218,7 +205,7 @@ export const Game = async ({
       }
       damagePanel.flash(bone);
     }
-    damagePanel.update(damage, "Damage");
+    damagePanel.update(r.damage, runTitle(r));
   };
 
   const updateFlashes = (dt: number) => {
@@ -379,7 +366,7 @@ export const Game = async ({
     if (!running) return;
     running = false;
     for (const flash of flashes) flash.remaining = 0;
-    damagePanel.update(damage, "Last run");
+    damagePanel.update(run?.damage ?? noDamage, "Last run");
     rig.follow(null);
     if (setupView) rig.glideTo(setupView);
   };
@@ -389,11 +376,10 @@ export const Game = async ({
     cancelDrag();
     setupView = rig.view;
     running = true;
-    damage.fill(0);
-    damagePanel.update(damage, "Damage");
     tool = null;
     selected = null;
-    simulation.applyForces();
+    run = startRun(simulation, level.runSteps);
+    damagePanel.update(run.damage, runTitle(run));
     boxPreview.visible = false;
     refreshForces();
   };
@@ -512,6 +498,7 @@ export const Game = async ({
   };
 
   const hint = () => {
+    if (running && run?.finished) return "Run over · Space to reset and try again";
     if (running) return "Drag to orbit · scroll to zoom · Space to reset and try again";
     if (drag?.kind === "aim") return "Drag to aim across the floor · hold Shift to change height · hold Alt to aim without snapping";
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
@@ -579,25 +566,7 @@ export const Game = async ({
     return hit.point.clone().add(new THREE.Vector3(n.x * hx, n.y * hy, n.z * hz));
   };
 
-  /** True if a box at `position` would start overlapping a dynamic body. */
-  const boxBlocked = (position: THREE.Vector3) => {
-    const [hx, hy, hz] = BOX_HALF_EXTENTS;
-    const margin = 0.02;
-    let blocked = false;
-    b3.b3World_OverlapAABB(
-      simulation.world,
-      [
-        position.x - hx + margin, position.y - hy + margin, position.z - hz + margin,
-        position.x + hx - margin, position.y + hy - margin, position.z + hz - margin,
-      ],
-      queryFilter,
-      (shapeId: b3ShapeId) => {
-        blocked = simulation.refForBody(b3.b3Shape_GetBody(shapeId)) !== null;
-        return !blocked;
-      },
-    );
-    return blocked;
-  };
+  const boxBlocked = (position: THREE.Vector3) => simulation.boxOverlaps(position.toArray());
 
   const boxPreview = new THREE.Mesh(
     boxGeometry,
@@ -919,10 +888,11 @@ export const Game = async ({
     const dt = time - lastTime;
     lastTime = time;
 
-    if (running) {
-      simulation.step();
-      recordHits();
+    if (running && run && !run.finished) {
+      stepRun(run);
       syncVisuals();
+    }
+    if (running) {
       const { center, velocity } = ragdollMotion();
       rig.follow(center.add(velocity.multiplyScalar(LOOK_AHEAD_SECONDS).clampLength(0, MAX_LOOK_AHEAD)));
     } else if (previewEnabled && previewDirty) {

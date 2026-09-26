@@ -1,7 +1,6 @@
 import * as THREE from "three";
-import { HIT_SPEED_THRESHOLD } from "./simulation";
+import { BODY_PARTS, scoreOf } from "@stairs/shared/damage";
 
-const DAMAGE_SCALE = 10;
 /** Per-part damage at which the diagram shows full red. */
 const PART_DAMAGE_FOR_MAX_HEAT = 400;
 /** A single hit this big flashes at full strength. */
@@ -12,31 +11,25 @@ type Shape =
   | { kind: "rect"; x: number; y: number; w: number; h: number };
 
 /**
- * One entry per ragdoll bone, in ragdoll.ts order. The diagram is a front view,
- * so the ragdoll's left side is drawn on the viewer's right.
+ * Diagram shape for each ragdoll bone, in ragdoll.ts order. The diagram is a
+ * front view, so the ragdoll's left side is drawn on the viewer's right.
  */
-export const BODY_PARTS: { name: string; multiplier: number; shape: Shape }[] = [
-  { name: "Pelvis", multiplier: 1, shape: { kind: "rect", x: 33, y: 86, w: 34, h: 16 } },
-  { name: "Lower back", multiplier: 1.1, shape: { kind: "rect", x: 36, y: 74, w: 28, h: 12 } },
-  { name: "Abdomen", multiplier: 1.1, shape: { kind: "rect", x: 35, y: 62, w: 30, h: 12 } },
-  { name: "Chest", multiplier: 1.3, shape: { kind: "rect", x: 32, y: 38, w: 36, h: 24 } },
-  { name: "Neck", multiplier: 2, shape: { kind: "rect", x: 45, y: 29, w: 10, h: 9 } },
-  { name: "Head", multiplier: 3, shape: { kind: "circle", cx: 50, cy: 17, r: 12 } },
-  { name: "Left thigh", multiplier: 0.8, shape: { kind: "rect", x: 51, y: 103, w: 14, h: 43 } },
-  { name: "Left shin", multiplier: 0.7, shape: { kind: "rect", x: 52, y: 148, w: 12, h: 44 } },
-  { name: "Right thigh", multiplier: 0.8, shape: { kind: "rect", x: 35, y: 103, w: 14, h: 43 } },
-  { name: "Right shin", multiplier: 0.7, shape: { kind: "rect", x: 36, y: 148, w: 12, h: 44 } },
-  { name: "Left upper arm", multiplier: 0.6, shape: { kind: "rect", x: 70, y: 40, w: 10, h: 32 } },
-  { name: "Left forearm", multiplier: 0.5, shape: { kind: "rect", x: 71, y: 74, w: 9, h: 32 } },
-  { name: "Right upper arm", multiplier: 0.6, shape: { kind: "rect", x: 20, y: 40, w: 10, h: 32 } },
-  { name: "Right forearm", multiplier: 0.5, shape: { kind: "rect", x: 20, y: 74, w: 9, h: 32 } },
+const DIAGRAM_SHAPES: Shape[] = [
+  { kind: "rect", x: 33, y: 86, w: 34, h: 16 }, // pelvis
+  { kind: "rect", x: 36, y: 74, w: 28, h: 12 }, // lower back
+  { kind: "rect", x: 35, y: 62, w: 30, h: 12 }, // abdomen
+  { kind: "rect", x: 32, y: 38, w: 36, h: 24 }, // chest
+  { kind: "rect", x: 45, y: 29, w: 10, h: 9 }, // neck
+  { kind: "circle", cx: 50, cy: 17, r: 12 }, // head
+  { kind: "rect", x: 51, y: 103, w: 14, h: 43 }, // left thigh
+  { kind: "rect", x: 52, y: 148, w: 12, h: 44 }, // left shin
+  { kind: "rect", x: 35, y: 103, w: 14, h: 43 }, // right thigh
+  { kind: "rect", x: 36, y: 148, w: 12, h: 44 }, // right shin
+  { kind: "rect", x: 70, y: 40, w: 10, h: 32 }, // left upper arm
+  { kind: "rect", x: 71, y: 74, w: 9, h: 32 }, // left forearm
+  { kind: "rect", x: 20, y: 40, w: 10, h: 32 }, // right upper arm
+  { kind: "rect", x: 20, y: 74, w: 9, h: 32 }, // right forearm
 ];
-
-/** Damage from one impact: zero at the hit threshold, growing with speed². */
-export function damageForHit(bone: number, speed: number) {
-  const excess = Math.max(0, speed - HIT_SPEED_THRESHOLD);
-  return BODY_PARTS[bone].multiplier * DAMAGE_SCALE * excess * excess;
-}
 
 /** Flash colour for a hit: yellow for glancing blows through to red for big ones. */
 export function hitFlashColor(damage: number, target = new THREE.Color()) {
@@ -79,7 +72,7 @@ export class DamagePanel {
 
     // List parts from head to toe rather than in bone order.
     const order = [5, 4, 3, 2, 1, 0, 12, 10, 13, 11, 8, 6, 9, 7];
-    BODY_PARTS.forEach(({ shape }, bone) => {
+    DIAGRAM_SHAPES.forEach((shape, bone) => {
       const el = document.createElementNS(SVG_NS, shape.kind);
       for (const [key, value] of Object.entries(shape)) {
         if (key === "kind") continue;
@@ -106,7 +99,7 @@ export class DamagePanel {
 
   update(damage: readonly number[], title: string) {
     this.title.textContent = title;
-    this.total.textContent = Math.round(damage.reduce((a, b) => a + b, 0)).toLocaleString();
+    this.total.textContent = scoreOf(damage).toLocaleString();
     damage.forEach((value, bone) => {
       const rounded = Math.round(value);
       if (this.shown[bone] === rounded) return;

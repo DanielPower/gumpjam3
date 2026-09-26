@@ -1,4 +1,4 @@
-import type { Box3DModule, b3BodyId, b3Vec3, b3WorldId } from "box3d.js";
+import type { Box3DModule, b3BodyId, b3ShapeId, b3Vec3, b3WorldId } from "box3d.js";
 import { createHuman } from "./ragdoll";
 import {
   createMapCollisionObjects,
@@ -12,6 +12,11 @@ export const VELOCITY_PER_METER = 6;
 export const TIME_STEP = 1 / 60;
 const SUB_STEPS = 4;
 export const BOX_HALF_EXTENTS: b3Vec3 = [0.25, 0.25, 0.25];
+/** Force arrows are limited to this length (metres), i.e. a maximum strength. */
+export const MAX_ARROW_LENGTH = 1.5;
+export const MIN_ARROW_LENGTH = 0.05;
+/** Boxes may touch other things, but not overlap them by more than this. */
+const BOX_OVERLAP_TOLERANCE = 0.01;
 const PROP_DENSITY = 0.6;
 const RAGDOLL_GROUP = 1;
 const RAGDOLL_JOINT_FRICTION = 0.05;
@@ -57,6 +62,11 @@ export type Simulation = {
   refForBody(body: b3BodyId): BodyRef | null;
   /** Apply every force placement's impulse. Call once, before the first step. */
   applyForces(): void;
+  /**
+   * True if a box at `position` would overlap the level, the ragdoll, or
+   * another box (other than the box with id `ignoreProp`).
+   */
+  boxOverlaps(position: b3Vec3, ignoreProp?: number): boolean;
   step(): void;
   /**
    * Hits on the ragdoll during the last step. Hits between the ragdoll's own
@@ -141,6 +151,22 @@ export function createSimulation(
     }
   };
 
+  const boxCorners: number[] = [];
+  const [hx, hy, hz] = BOX_HALF_EXTENTS.map((h) => h - BOX_OVERLAP_TOLERANCE);
+  for (const x of [-hx, hx]) for (const y of [-hy, hy]) for (const z of [-hz, hz]) boxCorners.push(x, y, z);
+  const queryFilter = b3.b3DefaultQueryFilter();
+
+  const boxOverlaps = (position: b3Vec3, ignoreProp?: number) => {
+    let overlaps = false;
+    b3.b3World_OverlapShape(world, position, boxCorners, 0, queryFilter, (shapeId: b3ShapeId) => {
+      const ref = refs.get(bodyKey(b3.b3Shape_GetBody(shapeId)));
+      if (ref?.kind === "prop" && ref.id === ignoreProp) return true;
+      overlaps = true;
+      return false;
+    });
+    return overlaps;
+  };
+
   let events: ReturnType<Box3DModule["createEventsBuffer"]> | null = null;
   const hitEvent = b3.createContactHitEvent();
 
@@ -167,6 +193,7 @@ export function createSimulation(
     resolve,
     refForBody: (body) => refs.get(bodyKey(body)) ?? null,
     applyForces,
+    boxOverlaps,
     step: () => b3.b3World_Step(world, TIME_STEP, SUB_STEPS),
     ragdollHits,
     destroy: () => {

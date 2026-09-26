@@ -1,8 +1,8 @@
 import type { Box3DModule, b3BodyId, b3Vec3 } from "box3d.js";
 import * as THREE from "three";
 import { syncObjectToBody } from "./box3d-three";
-import { createSimulation, TIME_STEP, type Placement } from "./simulation";
-import type { TrenchBroomMap } from "./trenchbroom-map";
+import { createSimulation, TIME_STEP, type Placement } from "@stairs/shared/simulation";
+import type { TrenchBroomMap } from "@stairs/shared/trenchbroom-map";
 
 const PREVIEW_SECONDS = 2;
 const SAMPLE_EVERY = 2;

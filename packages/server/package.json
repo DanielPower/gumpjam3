@@ -1,0 +1,27 @@
+{
+  "name": "@stairs/server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --sourcemap --external:box3d.js --outfile=dist/index.js",
+    "start": "node --enable-source-maps dist/index.js",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "tsx --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@stairs/shared": "workspace:*",
+    "box3d.js": "^0.1.1",
+    "hono": "^4.13.9",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/three": "^0.185.4",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2"
+  }
+}

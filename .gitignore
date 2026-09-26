@@ -24,4 +24,7 @@ dist-ssr
 *.sln
 *.sw?
 
-/src/assets/autosave
+packages/shared/levels/autosave
+
+# Server database
+packages/server/data

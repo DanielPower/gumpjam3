@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { MAX_ARROW_LENGTH } from "./force-aim";
+import { MAX_ARROW_LENGTH } from "@stairs/shared/simulation";
 
 const SHAFT_RADIUS = 0.018;
 const MAX_HEAD_LENGTH = 0.18;
