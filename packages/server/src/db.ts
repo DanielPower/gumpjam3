@@ -17,8 +17,9 @@ export type ScoreStore = {
 export function openScoreStore(path: string): ScoreStore {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
+  // Default (rollback) journal rather than WAL: WAL doesn't work on network
+  // filesystems, and production keeps the database on an NFS share.
   db.exec(`
-    PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS scores (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       level TEXT NOT NULL,
