@@ -117,6 +117,50 @@ export function playBeep(final: boolean, pan = 0) {
   oscillator.stop(t + length + 0.02);
 }
 
+export type LoopingSound = { setPan(pan: number): void; stop(): void };
+
+/**
+ * A thruster's roar: a rumble of low noise with a hiss on top, crackling a
+ * little, until it's stopped (fading out as the fuel runs dry). Null if sound
+ * is off or not started yet.
+ */
+export function startThruster(pan = 0): LoopingSound | null {
+  if (!context || !output || !noise || muted || context.state !== "running") return null;
+  const ctx = context;
+  const t = ctx.currentTime;
+  const source = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
+  const rumble = new BiquadFilterNode(ctx, { type: "lowpass", frequency: 700, Q: 0.8 });
+  const rumbleGain = new GainNode(ctx, { gain: 0.5 });
+  const hiss = new BiquadFilterNode(ctx, { type: "bandpass", frequency: 2600, Q: 0.8 });
+  const hissGain = new GainNode(ctx, { gain: 0.08 });
+  // The crackle: the level wobbling quickly and unevenly.
+  const level = new GainNode(ctx, { gain: 0 });
+  const crackle = new OscillatorNode(ctx, { type: "sawtooth", frequency: 19 });
+  const crackleDepth = new GainNode(ctx, { gain: 0.08 });
+  crackle.connect(crackleDepth).connect(level.gain);
+  const panner = new StereoPannerNode(ctx, { pan: Math.max(-1, Math.min(1, pan)) * 0.7 });
+  source.connect(rumble).connect(rumbleGain).connect(level);
+  source.connect(hiss).connect(hissGain).connect(level);
+  level.connect(panner).connect(output);
+  level.gain.setValueAtTime(0, t);
+  level.gain.linearRampToValueAtTime(0.35, t + 0.08);
+  source.start(t, Math.random() * (noise.duration - 0.1));
+  crackle.start(t);
+  let stopped = false;
+  return {
+    setPan: (value) => panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, value)) * 0.7, ctx.currentTime, 0.05),
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      const now = ctx.currentTime;
+      level.gain.cancelScheduledValues(now);
+      level.gain.setTargetAtTime(0, now, 0.08);
+      source.stop(now + 0.5);
+      crackle.stop(now + 0.5);
+    },
+  };
+}
+
 /** A little variety, so repeated hits don't sound mechanical. */
 const vary = (value: number, amount = 0.08) => value * (1 + (Math.random() * 2 - 1) * amount);
 

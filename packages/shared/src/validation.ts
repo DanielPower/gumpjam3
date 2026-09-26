@@ -82,8 +82,16 @@ export function parsePlacements(input: unknown, maxCount: number): Placement[] {
         normal: vec3(item.normal, `${what}.normal`),
       };
     }
+    if (item.kind === "thruster") {
+      return {
+        kind: "thruster",
+        target: bodyRef(item.target, `${what}.target`),
+        localPoint: vec3(item.localPoint, `${what}.localPoint`),
+        localNormal: vec3(item.localNormal, `${what}.localNormal`),
+      };
+    }
     if (item.kind === "rope") return { kind: "rope", a: ropeEnd(item.a, `${what}.a`), b: ropeEnd(item.b, `${what}.b`) };
-    throw new PlacementError(`${what}.kind must be "force", "box", "mine", "bait" or "rope"`);
+    throw new PlacementError(`${what}.kind must be "force", "box", "mine", "bait", "rope" or "thruster"`);
   });
 }
 
@@ -106,7 +114,7 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
   const minY = level.bounds.min.y;
   const maxY = level.bounds.max.y + MAX_HEIGHT_ABOVE_LEVEL;
   for (const p of placements) {
-    if (p.kind === "force" || p.kind === "rope") continue;
+    if (p.kind === "force" || p.kind === "rope" || p.kind === "thruster") continue;
     const ids = p.kind === "box" ? propIds : p.kind === "mine" ? mineIds : baitIds;
     if (p.id <= 0 || ids.has(p.id)) throw new PlacementError(`${p.kind} id ${p.id} must be positive and unique`);
     ids.add(p.id);
@@ -139,6 +147,11 @@ export function validatePlacements(b3: Box3DModule, level: Level, placements: re
   for (const p of placements) {
     if (p.kind === "rope") {
       for (const end of [p.a, p.b]) if (end.target.kind !== "level") checkAttachment(end.target, end.localPoint, "rope");
+      continue;
+    }
+    if (p.kind === "thruster") {
+      checkAttachment(p.target, p.localPoint, "thruster");
+      if (Math.abs(Math.hypot(...p.localNormal) - 1) > 1e-3) throw new PlacementError("a thruster's normal must be a unit vector");
       continue;
     }
     if (p.kind !== "force") continue;

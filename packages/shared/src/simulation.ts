@@ -77,6 +77,11 @@ const CAR_MAX_ACCELERATION = 6;
 const CAR_THROTTLE_GAIN = 10;
 const CAR_SURFACE: SurfaceMaterial = { friction: 0.2, restitution: 0.1 };
 
+/** A thruster's push (newtons): enough to lift the whole ragdoll, and send a box flying. */
+export const THRUSTER_FORCE = 1500;
+/** How long a thruster burns before it runs out of fuel. */
+export const THRUSTER_SECONDS = 6;
+
 /** Mines may touch other things, but not overlap them by more than this (metres). */
 const MINE_OVERLAP_TOLERANCE = 0.01;
 export const MINE_BLAST = { radius: 3.5, speed: 16 };
@@ -155,7 +160,20 @@ export type RopeEnd = {
  */
 export type RopePlacement = { kind: "rope"; a: RopeEnd; b: RopeEnd };
 
-export type Placement = ForcePlacement | BoxPlacement | MinePlacement | BaitPlacement | RopePlacement;
+/**
+ * A thruster stuck to a body's surface, pushing into it for its first
+ * THRUSTER_SECONDS, turning with the body as it goes.
+ */
+export type ThrusterPlacement = {
+  kind: "thruster";
+  target: BodyRef;
+  /** Where it's stuck on, in the body's local frame. */
+  localPoint: b3Vec3;
+  /** The surface's outward normal there, in the body's local frame. It pushes the opposite way. */
+  localNormal: b3Vec3;
+};
+
+export type Placement = ForcePlacement | BoxPlacement | MinePlacement | BaitPlacement | RopePlacement | ThrusterPlacement;
 export type PlacementKind = Placement["kind"];
 export type Inventory = Record<PlacementKind, number>;
 
@@ -199,6 +217,8 @@ export type Simulation = {
   ratRoutes(): readonly RatRoute[];
   /** Whether a rat has reached and eaten this bait. */
   baitConsumed(id: number): boolean;
+  /** Whether thruster `index` (counting thrusters in placement order) is burning. */
+  thrusterBurning(index: number): boolean;
   /** Whether `body` is the level's static geometry (not a moving part). */
   isLevel(body: b3BodyId): boolean;
   /** Where a rope end is in the world right now. */
@@ -591,6 +611,29 @@ export function createSimulation(
     b3.b3CreateDistanceJoint(world, def);
   });
 
+  // Thrusters, each pushing into its body while it has fuel.
+  const thrusters = placements.filter((p): p is ThrusterPlacement => p.kind === "thruster");
+  const burnSteps = Math.round(THRUSTER_SECONDS / TIME_STEP);
+  const thrusterBurning = (index: number) => {
+    const thruster = thrusters[index];
+    if (!thruster || stepCount >= burnSteps) return false;
+    // Nothing to push once what it's stuck to has blown up.
+    const { target } = thruster;
+    return !(target.kind === "mine" && detonatedMines.has(target.id)) && !(target.kind === "barrel" && detonatedBarrels.has(target.index));
+  };
+  const fireThrusters = () => {
+    const point: b3Vec3 = [0, 0, 0];
+    const direction: b3Vec3 = [0, 0, 0];
+    thrusters.forEach((thruster, index) => {
+      if (!thrusterBurning(index)) return;
+      const body = resolve(thruster.target);
+      b3.b3Body_GetWorldPoint(point, body, thruster.localPoint);
+      b3.b3Body_GetWorldVector(direction, body, thruster.localNormal);
+      const scale = -THRUSTER_FORCE / Math.max(Math.hypot(...direction), 1e-6);
+      b3.b3Body_ApplyForce(body, [direction[0] * scale, direction[1] * scale, direction[2] * scale], point, true);
+    });
+  };
+
   const applyForces = () => {
     const point: b3Vec3 = [0, 0, 0];
     for (const placement of placements) {
@@ -881,6 +924,7 @@ export function createSimulation(
     mineProblem,
     baitProblem,
     isLevel: (body) => bodyKey(body) === bodyKey(levelBody),
+    thrusterBurning,
     ropeEndPoint,
     ropeProblem,
     resolve,
@@ -889,6 +933,7 @@ export function createSimulation(
     boxOverlaps,
     step: () => {
       driveMovers();
+      fireThrusters();
       b3.b3World_Step(world, TIME_STEP, SUB_STEPS);
       stepCount++;
       afterStep();

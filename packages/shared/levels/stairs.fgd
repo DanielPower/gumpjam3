@@ -12,6 +12,7 @@
 	inventory_mine(integer) : "Mines the player can place" : 0
 	inventory_bait(integer) : "Cheese bait the player can place" : 0
 	inventory_rope(integer) : "Ropes the player can tie" : 0
+	inventory_thruster(integer) : "Thrusters the player can stick on things" : 0
 ]
 
 @PointClass size(-10 -10 0, 10 10 29) color(220 40 30) = prop_barrel : "Explosive barrel; its origin is the centre of its base. Goes off when hit hard or caught in a blast" []

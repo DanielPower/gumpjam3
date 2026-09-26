@@ -55,7 +55,14 @@ const rope = `
   <path d="M38 27 C40 33 35 37 30 39 C26 40.5 22 40 19 42" fill="none" stroke="#c89a5a" stroke-width="4" stroke-linecap="round"/>
   <path d="M10 20 L38 24 M12 26 L36 20" fill="none" stroke="#7a5428" stroke-width="1" opacity="0.6"/>`;
 
-const ICONS: Record<PlacementKind, string> = { force, box, mine, bait, rope };
+const thruster = `
+  <path d="M30 6 L40 16 L22 34 L14 26 Z" fill="#d8dde3" ${OUTLINE}/>
+  <path d="M30 6 L40 16 L37 19 L27 9 Z" fill="#e0452d" ${OUTLINE}/>
+  <path d="M22 34 L14 26 L11 29 L19 37 Z" fill="#3a3d42" ${OUTLINE}/>
+  <path d="M13 31 C7 33 5 38 4 44 C10 43 15 41 17 35 Z" fill="#ffa040" ${OUTLINE}/>
+  <path d="M13.5 33.5 C10 35 9 38 8.5 40 C11 39.5 13 38 14.5 35.5 Z" fill="#fff3c0"/>`;
+
+const ICONS: Record<PlacementKind, string> = { force, box, mine, bait, rope, thruster };
 
 export function inventoryIcon(kind: PlacementKind) {
   const template = document.createElement("template");

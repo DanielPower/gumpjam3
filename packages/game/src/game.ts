@@ -10,6 +10,7 @@ import {
   MAX_ARROW_LENGTH,
   MIN_ARROW_LENGTH,
   MINE_SURFACE_OFFSET,
+  THRUSTER_SECONDS,
   TIME_STEP,
   VELOCITY_PER_METER,
   type BodyRef,
@@ -19,6 +20,7 @@ import {
   type RopeEnd,
   type RopePlacement,
   type RopeTarget,
+  type ThrusterPlacement,
   type Simulation,
 } from "@stairs/shared/simulation";
 import { getEntityWorldOrigin, getEntityWorldYaw } from "@stairs/shared/trenchbroom-map";
@@ -45,7 +47,8 @@ import { RunTimer } from "./run-timer";
 import { inventoryIcon } from "./inventory-icons";
 import { PoseInterpolator } from "./pose-interpolator";
 import { RopeView } from "./rope-view";
-import { isMuted, playBeep, playImpacts, setMuted } from "./sound-effects";
+import { ThrusterView } from "./thruster-view";
+import { isMuted, playBeep, playImpacts, setMuted, startThruster, type LoopingSound } from "./sound-effects";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { fatLineMaterial, fatLines, strip } from "./fat-lines";
 
@@ -65,8 +68,22 @@ const MAX_LOOK_AHEAD = 1;
 const HIT_FLASH_SECONDS = 0.4;
 const LEVEL_IDS = Object.keys(levelSources);
 
-const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait", rope: "Rope" };
-const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait", Digit5: "rope" };
+const TOOL_LABELS: Record<PlacementKind, string> = {
+  force: "Force",
+  box: "Box",
+  mine: "Mine",
+  bait: "Bait",
+  rope: "Rope",
+  thruster: "Thruster",
+};
+const TOOL_KEYS: Record<string, PlacementKind> = {
+  Digit1: "force",
+  Digit2: "box",
+  Digit3: "mine",
+  Digit4: "bait",
+  Digit5: "rope",
+  Digit6: "thruster",
+};
 
 function disposeObject(object: THREE.Object3D) {
   object.removeFromParent();
@@ -233,6 +250,8 @@ export const Game = ({
   scene.add(ropeView.object3d);
   /** Each rope's links, following their physics bodies (drawn by ropeView). */
   let ropeSegments: THREE.Object3D[][] = [];
+  const thrusterView = new ThrusterView();
+  scene.add(thrusterView.object3d);
 
   const boxGeometry = new THREE.BoxGeometry(
     BOX_HALF_EXTENTS[0] * 2,
@@ -415,6 +434,61 @@ export const Game = ({
     });
   };
 
+  // --- Thrusters -----------------------------------------------------------------
+
+  const thrusterPlacements = () =>
+    placements.flatMap((placement, index) => (placement.kind === "thruster" ? [{ placement, index }] : []));
+
+  /** Where a thruster is drawn, on its object's (smoothed) mesh; null once that's gone. */
+  const thrusterPose = (thruster: Pick<ThrusterPlacement, "target" | "localPoint" | "localNormal">) => {
+    const mesh = meshOfTarget(thruster.target);
+    if (!mesh || !mesh.visible) return null;
+    mesh.updateWorldMatrix(true, false);
+    const turn = mesh.getWorldQuaternion(new THREE.Quaternion());
+    return {
+      point: mesh.localToWorld(new THREE.Vector3(...thruster.localPoint)),
+      normal: new THREE.Vector3(...thruster.localNormal).applyQuaternion(turn),
+    };
+  };
+
+  /** A thruster stuck to whatever body is under the pointer, or null if it isn't one. */
+  const thrusterAt = (hit: NonNullable<ReturnType<typeof pick>>): ThrusterPlacement | null => {
+    const target = simulation.refForBody(hit.body);
+    if (!target) return null;
+    const localPoint: b3Vec3 = [0, 0, 0];
+    const localNormal: b3Vec3 = [0, 0, 0];
+    b3.b3Body_GetLocalPoint(localPoint, hit.body, hit.point.toArray());
+    b3.b3Body_GetLocalVector(localNormal, hit.body, hit.normal.clone().normalize().toArray());
+    return { kind: "thruster", target, localPoint, localNormal };
+  };
+
+  /** Each burning thruster's roar, by its index among the thrusters. */
+  const thrusterSounds = new Map<number, LoopingSound>();
+  const stopThrusterSounds = () => {
+    for (const sound of thrusterSounds.values()) sound.stop();
+    thrusterSounds.clear();
+  };
+
+  /** Draw thrusters where they are now, flaming (and roaring) while they burn during a run. */
+  const updateThrusters = (time: number) => {
+    thrusterPlacements().forEach(({ placement, index }, i) => {
+      const pose = thrusterPose(placement);
+      const burning = pose !== null && running && run !== null && run.stepsTaken > 0 && simulation.thrusterBurning(i);
+      thrusterView.update(i, pose, burning, index === selected, time);
+      const sound = thrusterSounds.get(i);
+      const pan = pose ? pose.point.clone().project(activeCamera).x : 0;
+      if (burning && !sound) {
+        const started = startThruster(pan);
+        if (started) thrusterSounds.set(i, started);
+      } else if (!burning && sound) {
+        sound.stop();
+        thrusterSounds.delete(i);
+      } else {
+        sound?.setPan(pan);
+      }
+    });
+  };
+
   /** The index of the rope under the pointer, or -1. */
   const hitRope = () => {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -527,6 +601,8 @@ export const Game = ({
       }),
     );
     ropeView.setRopes(ropeSegments.map((links) => links.length + 1));
+    stopThrusterSounds();
+    thrusterView.setCount(thrusterPlacements().length);
 
     syncVisuals();
     refreshForces();
@@ -570,7 +646,8 @@ export const Game = ({
           i !== index &&
           !(removed.kind === "box" && p.kind === "force" && p.target.kind === "prop" && p.target.id === removed.id) &&
           !(removed.kind === "mine" && p.kind === "force" && p.target.kind === "mine" && p.target.id === removed.id) &&
-          !(p.kind === "rope" && [p.a, p.b].some((end) => tiedTo(end.target, removed))),
+          !(p.kind === "rope" && [p.a, p.b].some((end) => tiedTo(end.target, removed))) &&
+          !(p.kind === "thruster" && tiedTo(p.target, removed)),
       ),
     );
   };
@@ -590,6 +667,7 @@ export const Game = ({
   const selectTool = (kind: PlacementKind | null) => {
     if (running) return;
     tool = kind && remaining(kind) > 0 && tool !== kind ? kind : null;
+    thrusterView.showPreview(null);
     boxPreview.visible = false;
     baitPreview.visible = false;
     explosives.showPreview(null);
@@ -608,6 +686,7 @@ export const Game = ({
   const stopRunning = () => {
     if (!running) return;
     running = false;
+    stopThrusterSounds();
     for (const flash of flashes) flash.remaining = 0;
     damagePanel.update(run?.damage ?? noDamage, "Last run");
     leaderboard?.withdraw();
@@ -813,8 +892,10 @@ export const Game = ({
     if (current?.kind === "box") return "Drag the box to move it";
     if (current?.kind === "mine") return "Drag the mine to move it";
     if (current?.kind === "rope") return "Rope selected";
+    if (current?.kind === "thruster") return "Thruster selected";
     if (current?.kind === "bait") return "Drag the bait to move it · the rat charges along this line when the body approaches";
     if (tool === "force") return "Drag out from a body part to add a force";
+    if (tool === "thruster") return `${tap} an object to stick a thruster on it · it pushes into the object for ${THRUSTER_SECONDS} seconds`;
     if (tool === "rope") return "Drag from one thing to another to tie them together · boxes, mines, barrels, the body, or the level";
     if (tool === "box") return `${tap} a surface to place a box`;
     if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
@@ -941,7 +1022,7 @@ export const Game = ({
     | { kind: "place"; index: number; moving: boolean; candidate: MovablePlacement; valid: boolean }
     // Tying a rope from `a` to wherever the pointer is (`b`), if it can go there.
     | { kind: "rope"; a: RopeEnd; b: RopeEnd | null; problem: string | null };
-  type MovablePlacement = Exclude<Placement, ForcePlacement | RopePlacement>;
+  type MovablePlacement = Exclude<Placement, ForcePlacement | RopePlacement | ThrusterPlacement>;
   let drag: Drag | null = null;
 
   const aimVector = (aim: Aim) => aim.raw.clone();
@@ -1176,7 +1257,7 @@ export const Game = ({
 
       // With no tool, pressing a placed box, mine or bait selects it, and
       // dragging moves it (rather than rotating the camera).
-      const object = tool === null ? placedObjectAt() : -1;
+      const object = tool === null && thrusterView.hit(raycaster) < 0 ? placedObjectAt() : -1;
       if (object >= 0) {
         pointerDownHandled = true;
         event.stopPropagation();
@@ -1247,6 +1328,13 @@ export const Game = ({
       }
     }
 
+    if (tool === "thruster") {
+      const hit = pick();
+      const thruster = hit && thrusterAt(hit);
+      thrusterView.showPreview(hit ? { point: hit.point, normal: hit.normal } : null, thruster === null);
+      renderer.domElement.style.cursor = thruster ? "crosshair" : "";
+    }
+
     if (tool === "bait") {
       const hit = pick();
       const position = hit && baitPositionFor(hit);
@@ -1294,6 +1382,14 @@ export const Game = ({
       return;
     }
 
+    if (tool === "thruster") {
+      const thruster = hit && thrusterAt(hit);
+      if (!thruster) return;
+      thrusterView.showPreview(null);
+      addPlacement(thruster);
+      return;
+    }
+
     if (tool === "bait") {
       if (!hit) return;
       const position = baitPositionFor(hit);
@@ -1303,6 +1399,11 @@ export const Game = ({
       return;
     }
 
+    const thrusterIndex = thrusterView.hit(raycaster);
+    if (thrusterIndex >= 0) {
+      select(thrusterPlacements()[thrusterIndex].index);
+      return;
+    }
     // Ropes are thin, so they're picked by how close they're drawn to the pointer.
     const ropeIndex = hitRope();
     if (ropeIndex >= 0) {
@@ -1478,6 +1579,7 @@ export const Game = ({
     explosives.update(Math.min(dt, 100) / 1000);
 
     updateRopes();
+    updateThrusters(time / 1000);
     renderer.render(scene, activeCamera);
     debugElement.innerText = debugInfo({ dt });
     const hintText = hint();
@@ -1490,6 +1592,7 @@ export const Game = ({
   return {
     dispose() {
       lifetime.abort();
+      stopThrusterSounds();
       renderer.setAnimationLoop(null);
       window.clearTimeout(aimLabelTimeout);
       rig.controls.dispose();
