@@ -23,8 +23,8 @@ const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
 const ZOOM_PER_WHEEL_PIXEL = 0.0015;
 const GLIDE_SECONDS = 0.3;
-const ROTATE_BUTTON = 0;
-const PAN_BUTTON = 2;
+const PAN_BUTTON = 0;
+const ROTATE_BUTTON = 2;
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
@@ -34,7 +34,7 @@ export type SurfacePicker = (ray: THREE.Ray) => THREE.Vector3 | null;
 /**
  * Isometric orthographic camera for the edit phase, rotating only around the
  * vertical axis.
- * - Mouse: left-drag to rotate, right-drag to pan, scroll to zoom towards the cursor.
+ * - Mouse: left-drag to pan, right-drag to rotate, scroll to zoom towards the cursor.
  * - Touch: drag to pan; with two fingers, move to pan, pinch to zoom, and
  *   twist to rotate.
  * Panning moves the camera in its view plane by exactly the world distance
@@ -97,7 +97,7 @@ export class IsometricCamera {
         }
       }
       if (this.drag || this.pinch) return;
-      // One finger pans, since it can't right-drag and rotating is a twist.
+      // One finger pans, like the left button; rotating is a two-finger twist.
       const mode =
         event.pointerType === "touch" || event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
       if (!mode) return;

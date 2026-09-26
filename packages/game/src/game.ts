@@ -903,7 +903,7 @@ export const Game = ({
     if (tool === "mine") return `${tap} a surface to place a mine · it arms when the body comes close, then goes off a second later`;
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
     return touch
-      ? "Choose an item to set up the run · tap a placed item to select it · drag to pan · pinch to zoom · twist two fingers to rotate"
+      ? "Choose an item to set up the run · tap a placedrag to pan · pinch to zoom · twist two fingers to rotate"
       : "Choose an item to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom";
   };
 
