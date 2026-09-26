@@ -68,3 +68,56 @@ body {
   pointer-events: none;
   z-index: 101;
 }
+
+#damage {
+  position: absolute;
+  top: 36px;
+  right: 12px;
+  width: 190px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.8);
+  color: #ddd;
+  font-size: 12px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+#damage .damage-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #999;
+}
+
+#damage .damage-total {
+  font-size: 28px;
+  font-weight: bold;
+  color: white;
+  font-variant-numeric: tabular-nums;
+}
+
+#damage .damage-figure {
+  display: block;
+  width: 90px;
+  margin: 6px auto 8px;
+}
+
+#damage .damage-figure .hit {
+  animation: damage-hit 0.4s ease-out;
+}
+
+@keyframes damage-hit {
+  from {
+    fill: white;
+  }
+}
+
+#damage .damage-row {
+  display: flex;
+  justify-content: space-between;
+  line-height: 1.5;
+}
+
+#damage .damage-row span:last-child {
+  font-variant-numeric: tabular-nums;
+}

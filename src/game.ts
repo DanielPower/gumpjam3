@@ -7,6 +7,7 @@ import {
   type PhysicsDebugRenderer,
 } from "./box3d-three";
 import { CameraRig, type CameraView } from "./camera-rig";
+import { BODY_PARTS, DamagePanel, damageForHit, hitFlashColor, hitFlashStrength } from "./damage";
 import { Aim, describeAim, MAX_ARROW_LENGTH, MIN_ARROW_LENGTH, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { createTrajectoryPreview } from "./preview";
@@ -43,6 +44,8 @@ const CAMERA_OFFSET = new THREE.Vector3(-2, 1.5, 4.5);
 /** While following, aim this far ahead along the ragdoll's velocity. */
 const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
+/** How long a body part glows after taking a hit. */
+const HIT_FLASH_SECONDS = 0.4;
 const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1 };
 
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
@@ -191,6 +194,42 @@ export const Game = async ({
     shirt, skin, shirt, skin,
   ];
   const ragdollMeshes: THREE.Group[] = [];
+  // Each bone gets its own material so it can flash independently on impact.
+  const boneMaterials: THREE.MeshStandardMaterial[] = [];
+
+  // --- Damage -------------------------------------------------------------------
+
+  const damage = BODY_PARTS.map(() => 0);
+  const flashes = BODY_PARTS.map(() => ({ remaining: 0, strength: 0, color: new THREE.Color() }));
+  const damagePanel = new DamagePanel();
+  container.appendChild(damagePanel.element);
+
+  const recordHits = () => {
+    for (const { bone, speed } of simulation.ragdollHits()) {
+      const amount = damageForHit(bone, speed);
+      damage[bone] += amount;
+      const flash = flashes[bone];
+      const strength = hitFlashStrength(amount);
+      // Don't let a glancing blow cut short the glow from a bigger one.
+      if (flash.remaining <= 0 || strength >= flash.strength * (flash.remaining / HIT_FLASH_SECONDS)) {
+        flash.remaining = HIT_FLASH_SECONDS;
+        flash.strength = strength;
+        hitFlashColor(amount, flash.color);
+      }
+      damagePanel.flash(bone);
+    }
+    damagePanel.update(damage, "Damage");
+  };
+
+  const updateFlashes = (dt: number) => {
+    flashes.forEach((flash, bone) => {
+      const material = boneMaterials[bone];
+      if (!material) return;
+      flash.remaining = Math.max(0, flash.remaining - dt);
+      const k = flash.remaining / HIT_FLASH_SECONDS;
+      material.emissive.copy(flash.color).multiplyScalar(flash.strength * k * k);
+    });
+  };
 
   const remaining = (kind: PlacementKind) =>
     inventory[kind] - placements.filter((p) => p.kind === kind).length;
@@ -242,7 +281,8 @@ export const Game = async ({
         for (const shape of shapes) {
           const geometry = createShapeDebugGeometry(b3, shape);
           if (!geometry) continue;
-          const mesh = new THREE.Mesh(geometry, BONE_MATERIALS[bone] ?? skin);
+          boneMaterials[bone] ??= (BONE_MATERIALS[bone] ?? skin).clone();
+          const mesh = new THREE.Mesh(geometry, boneMaterials[bone]);
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           group.add(mesh);
@@ -338,6 +378,8 @@ export const Game = async ({
   const stopRunning = () => {
     if (!running) return;
     running = false;
+    for (const flash of flashes) flash.remaining = 0;
+    damagePanel.update(damage, "Last run");
     rig.follow(null);
     if (setupView) rig.glideTo(setupView);
   };
@@ -347,6 +389,8 @@ export const Game = async ({
     cancelDrag();
     setupView = rig.view;
     running = true;
+    damage.fill(0);
+    damagePanel.update(damage, "Damage");
     tool = null;
     selected = null;
     simulation.applyForces();
@@ -877,6 +921,7 @@ export const Game = async ({
 
     if (running) {
       simulation.step();
+      recordHits();
       syncVisuals();
       const { center, velocity } = ragdollMotion();
       rig.follow(center.add(velocity.multiplyScalar(LOOK_AHEAD_SECONDS).clampLength(0, MAX_LOOK_AHEAD)));
@@ -886,6 +931,7 @@ export const Game = async ({
     }
     trajectory.object3d.visible = !running && previewEnabled;
     rig.update(Math.min(dt, 100) / 1000);
+    updateFlashes(Math.min(dt, 100) / 1000);
 
     renderer.render(scene, camera);
     debugElement.innerText = debugInfo({ dt });

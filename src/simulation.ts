@@ -15,6 +15,8 @@ export const BOX_HALF_EXTENTS: b3Vec3 = [0.25, 0.25, 0.25];
 const PROP_DENSITY = 0.6;
 const RAGDOLL_GROUP = 1;
 const RAGDOLL_JOINT_FRICTION = 0.05;
+/** Contacts approaching slower than this (m/s) aren't reported as hits. */
+export const HIT_SPEED_THRESHOLD = 1.5;
 
 /** Identifies a dynamic body in a way that survives rebuilding the world. */
 export type BodyRef =
@@ -41,6 +43,9 @@ export type Placement = ForcePlacement | BoxPlacement;
 export type PlacementKind = Placement["kind"];
 export type Inventory = Record<PlacementKind, number>;
 
+/** A ragdoll bone striking the level or a prop. */
+export type RagdollHit = { bone: number; speed: number; point: b3Vec3 };
+
 export type Simulation = {
   world: b3WorldId;
   /** Ragdoll bodies, indexed by bone. */
@@ -53,6 +58,11 @@ export type Simulation = {
   /** Apply every force placement's impulse. Call once, before the first step. */
   applyForces(): void;
   step(): void;
+  /**
+   * Hits on the ragdoll during the last step. Hits between the ragdoll's own
+   * bones are skipped so flailing limbs don't count as impacts.
+   */
+  ragdollHits(): RagdollHit[];
   destroy(): void;
 };
 
@@ -71,6 +81,7 @@ export function createSimulation(
   const world = b3.b3CreateWorld({
     ...b3.b3DefaultWorldDef(),
     gravity: [0, -9.8, 0],
+    hitEventThreshold: HIT_SPEED_THRESHOLD,
   });
   createMapCollisionObjects(b3, world, map);
 
@@ -91,7 +102,12 @@ export function createSimulation(
       RAGDOLL_JOINT_FRICTION,
     ).bodies;
   }
-  ragdoll.forEach((body, bone) => refs.set(bodyKey(body), { kind: "ragdoll", bone }));
+  ragdoll.forEach((body, bone) => {
+    refs.set(bodyKey(body), { kind: "ragdoll", bone });
+    const shapes = b3.b3Body_GetShapes(body);
+    for (const shape of shapes) b3.b3Shape_EnableHitEvents(shape, true);
+    shapes.delete();
+  });
 
   const props = new Map<number, b3BodyId>();
   for (const placement of placements) {
@@ -125,6 +141,25 @@ export function createSimulation(
     }
   };
 
+  let events: ReturnType<Box3DModule["createEventsBuffer"]> | null = null;
+  const hitEvent = b3.createContactHitEvent();
+
+  const ragdollHits = (): RagdollHit[] => {
+    events ??= b3.createEventsBuffer();
+    b3.getEvents(events, world);
+    const hits: RagdollHit[] = [];
+    for (let i = 0; i < b3.getNumContactHitEvents(events); i++) {
+      b3.getContactHitEventAt(hitEvent, events, i);
+      const a = refs.get(bodyKey(b3.b3Shape_GetBody(hitEvent.shapeIdA)));
+      const b = refs.get(bodyKey(b3.b3Shape_GetBody(hitEvent.shapeIdB)));
+      const bone = a?.kind === "ragdoll" ? a : b?.kind === "ragdoll" ? b : null;
+      const other = bone === a ? b : a;
+      if (!bone || other?.kind === "ragdoll") continue;
+      hits.push({ bone: bone.bone, speed: hitEvent.approachSpeed, point: [...hitEvent.point] });
+    }
+    return hits;
+  };
+
   return {
     world,
     ragdoll,
@@ -133,6 +168,10 @@ export function createSimulation(
     refForBody: (body) => refs.get(bodyKey(body)) ?? null,
     applyForces,
     step: () => b3.b3World_Step(world, TIME_STEP, SUB_STEPS),
-    destroy: () => b3.b3DestroyWorld(world),
+    ragdollHits,
+    destroy: () => {
+      if (events) b3.destroyEventsBuffer(events);
+      b3.b3DestroyWorld(world);
+    },
   };
 }

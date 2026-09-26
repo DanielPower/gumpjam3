@@ -1,0 +1,127 @@
+import * as THREE from "three";
+import { HIT_SPEED_THRESHOLD } from "./simulation";
+
+const DAMAGE_SCALE = 10;
+/** Per-part damage at which the diagram shows full red. */
+const PART_DAMAGE_FOR_MAX_HEAT = 400;
+/** A single hit this big flashes at full strength. */
+const HIT_DAMAGE_FOR_MAX_FLASH = 200;
+
+type Shape =
+  | { kind: "circle"; cx: number; cy: number; r: number }
+  | { kind: "rect"; x: number; y: number; w: number; h: number };
+
+/**
+ * One entry per ragdoll bone, in ragdoll.ts order. The diagram is a front view,
+ * so the ragdoll's left side is drawn on the viewer's right.
+ */
+export const BODY_PARTS: { name: string; multiplier: number; shape: Shape }[] = [
+  { name: "Pelvis", multiplier: 1, shape: { kind: "rect", x: 33, y: 86, w: 34, h: 16 } },
+  { name: "Lower back", multiplier: 1.1, shape: { kind: "rect", x: 36, y: 74, w: 28, h: 12 } },
+  { name: "Abdomen", multiplier: 1.1, shape: { kind: "rect", x: 35, y: 62, w: 30, h: 12 } },
+  { name: "Chest", multiplier: 1.3, shape: { kind: "rect", x: 32, y: 38, w: 36, h: 24 } },
+  { name: "Neck", multiplier: 2, shape: { kind: "rect", x: 45, y: 29, w: 10, h: 9 } },
+  { name: "Head", multiplier: 3, shape: { kind: "circle", cx: 50, cy: 17, r: 12 } },
+  { name: "Left thigh", multiplier: 0.8, shape: { kind: "rect", x: 51, y: 103, w: 14, h: 43 } },
+  { name: "Left shin", multiplier: 0.7, shape: { kind: "rect", x: 52, y: 148, w: 12, h: 44 } },
+  { name: "Right thigh", multiplier: 0.8, shape: { kind: "rect", x: 35, y: 103, w: 14, h: 43 } },
+  { name: "Right shin", multiplier: 0.7, shape: { kind: "rect", x: 36, y: 148, w: 12, h: 44 } },
+  { name: "Left upper arm", multiplier: 0.6, shape: { kind: "rect", x: 70, y: 40, w: 10, h: 32 } },
+  { name: "Left forearm", multiplier: 0.5, shape: { kind: "rect", x: 71, y: 74, w: 9, h: 32 } },
+  { name: "Right upper arm", multiplier: 0.6, shape: { kind: "rect", x: 20, y: 40, w: 10, h: 32 } },
+  { name: "Right forearm", multiplier: 0.5, shape: { kind: "rect", x: 20, y: 74, w: 9, h: 32 } },
+];
+
+/** Damage from one impact: zero at the hit threshold, growing with speed². */
+export function damageForHit(bone: number, speed: number) {
+  const excess = Math.max(0, speed - HIT_SPEED_THRESHOLD);
+  return BODY_PARTS[bone].multiplier * DAMAGE_SCALE * excess * excess;
+}
+
+/** Flash colour for a hit: yellow for glancing blows through to red for big ones. */
+export function hitFlashColor(damage: number, target = new THREE.Color()) {
+  const t = THREE.MathUtils.clamp(damage / HIT_DAMAGE_FOR_MAX_FLASH, 0, 1);
+  return target.setHSL(0.14 * (1 - t), 1, 0.5);
+}
+
+/** How strongly a hit flashes, from a faint glow up to full. */
+export function hitFlashStrength(damage: number) {
+  return THREE.MathUtils.clamp(0.35 + damage / HIT_DAMAGE_FOR_MAX_FLASH, 0.35, 1.5);
+}
+
+function heatColor(damage: number) {
+  if (damage <= 0) return "#3a3a3a";
+  const t = Math.min(1, damage / PART_DAMAGE_FOR_MAX_HEAT);
+  return `hsl(${Math.round(55 * (1 - t))}, 90%, ${Math.round(55 - 10 * t)}%)`;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** A body diagram shaded by damage, with a per-part breakdown and total. */
+export class DamagePanel {
+  readonly element = document.createElement("div");
+  private readonly title = document.createElement("div");
+  private readonly total = document.createElement("div");
+  private readonly shapes: SVGElement[] = [];
+  private readonly values: HTMLElement[] = [];
+  private readonly shown: number[] = [];
+
+  constructor() {
+    this.element.id = "damage";
+    this.title.className = "damage-title";
+    this.total.className = "damage-total";
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 100 196");
+    svg.classList.add("damage-figure");
+    const list = document.createElement("div");
+    list.className = "damage-list";
+
+    // List parts from head to toe rather than in bone order.
+    const order = [5, 4, 3, 2, 1, 0, 12, 10, 13, 11, 8, 6, 9, 7];
+    BODY_PARTS.forEach(({ shape }, bone) => {
+      const el = document.createElementNS(SVG_NS, shape.kind);
+      for (const [key, value] of Object.entries(shape)) {
+        if (key === "kind") continue;
+        el.setAttribute(key === "w" ? "width" : key === "h" ? "height" : key, String(value));
+      }
+      if (shape.kind === "rect") el.setAttribute("rx", "4");
+      svg.appendChild(el);
+      this.shapes[bone] = el;
+    });
+    for (const bone of order) {
+      const row = document.createElement("div");
+      row.className = "damage-row";
+      const name = document.createElement("span");
+      name.textContent = BODY_PARTS[bone].name;
+      const value = document.createElement("span");
+      row.append(name, value);
+      list.appendChild(row);
+      this.values[bone] = value;
+    }
+
+    this.element.append(this.title, this.total, svg, list);
+    this.update(BODY_PARTS.map(() => 0), "Damage");
+  }
+
+  update(damage: readonly number[], title: string) {
+    this.title.textContent = title;
+    this.total.textContent = Math.round(damage.reduce((a, b) => a + b, 0)).toLocaleString();
+    damage.forEach((value, bone) => {
+      const rounded = Math.round(value);
+      if (this.shown[bone] === rounded) return;
+      this.shown[bone] = rounded;
+      this.values[bone].textContent = rounded.toLocaleString();
+      this.shapes[bone].setAttribute("fill", heatColor(value));
+    });
+  }
+
+  /** Pulse a part of the diagram when it takes a hit. */
+  flash(bone: number) {
+    const shape = this.shapes[bone];
+    shape.classList.remove("hit");
+    // Restart the CSS animation.
+    void (shape as unknown as HTMLElement).getBoundingClientRect();
+    shape.classList.add("hit");
+  }
+}
