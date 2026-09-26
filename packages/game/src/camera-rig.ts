@@ -4,8 +4,14 @@ import { OrbitControls } from "three/examples/jsm/Addons.js";
 /** Time constant for following the ragdoll; higher is lazier. */
 const FOLLOW_LAG_SECONDS = 0.2;
 const TRANSITION_SECONDS = 1;
-/** Orthographic ends of a transition use a field of view this narrow, which is nearly indistinguishable. */
-const NEAR_ORTHOGRAPHIC_FOV = 5;
+/**
+ * The orthographic end of a transition is stood in for by a perspective camera
+ * this far away (metres), with a field of view of hundredths of a degree. Any
+ * nearer and the switch to or from the real orthographic camera visibly jumps.
+ */
+const ORTHOGRAPHIC_STAND_IN_DISTANCE = 20000;
+/** While transitioning, clip this close around the scene (metres), for depth precision. */
+const SCENE_DEPTH = 500;
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
@@ -36,8 +42,12 @@ const nearOrthographic = (view: OrthographicView): Pose => ({
   focus: view.focus.clone(),
   direction: view.direction.clone().normalize(),
   height: view.viewHeight,
-  fov: NEAR_ORTHOGRAPHIC_FOV,
+  fov: THREE.MathUtils.radToDeg(2 * Math.atan(view.viewHeight / 2 / ORTHOGRAPHIC_STAND_IN_DISTANCE)),
 });
+
+/** How strong a field of view's perspective is: tan(fov/2), 0 for orthographic. */
+const perspectiveOf = (fov: number) => Math.tan(THREE.MathUtils.degToRad(fov / 2));
+const fovFor = (perspective: number) => THREE.MathUtils.radToDeg(2 * Math.atan(perspective));
 
 /**
  * Orbit camera for runs, anchored to a point (usually the ragdoll): orbit and
@@ -51,6 +61,8 @@ export class CameraRig {
   private readonly camera: THREE.PerspectiveCamera;
   private followPoint: THREE.Vector3 | null = null;
   private readonly baseFov: number;
+  private readonly baseNear: number;
+  private readonly baseFar: number;
   private transition: {
     from: Pose;
     /** Evaluated every frame, so a transition can end on a moving target. */
@@ -64,6 +76,8 @@ export class CameraRig {
   constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
     this.camera = camera;
     this.baseFov = camera.fov;
+    this.baseNear = camera.near;
+    this.baseFar = camera.far;
     const controls = new OrbitControls(camera, domElement);
     controls.enablePan = false;
     controls.enableDamping = true;
@@ -79,7 +93,7 @@ export class CameraRig {
   setView(view: CameraView) {
     this.transition = null;
     this.transitionFocus = null;
-    this.setFov(this.baseFov);
+    this.setProjection(this.baseFov, this.baseNear, this.baseFar);
     this.controls.target.copy(view.target);
     this.camera.position.copy(view.position);
     this.controls.update();
@@ -171,16 +185,19 @@ export class CameraRig {
     const { from } = transition;
     const to = transition.to();
 
-    // The framed height changes in log space so the zoom feels even; the camera
-    // backs off or closes in to keep that height framed as the FOV changes.
+    // The framed height changes in log space so the zoom feels even. The
+    // strength of the perspective (not the angle) changes evenly, so the
+    // distortion grows or fades smoothly; the camera backs off or closes in to
+    // keep the framed height as it does.
     const pose: Pose = {
       focus: from.focus.clone().lerp(to.focus, k),
       direction: from.direction.clone().lerp(to.direction, k).normalize(),
       height: Math.exp(THREE.MathUtils.lerp(Math.log(from.height), Math.log(to.height), k)),
-      fov: THREE.MathUtils.lerp(from.fov, to.fov, k),
+      fov: fovFor(THREE.MathUtils.lerp(perspectiveOf(from.fov), perspectiveOf(to.fov), k)),
     };
-    this.setFov(pose.fov);
-    this.camera.position.copy(pose.focus).addScaledVector(pose.direction, distanceFor(pose));
+    const distance = distanceFor(pose);
+    this.setProjection(pose.fov, Math.max(this.baseNear, distance - SCENE_DEPTH), distance + SCENE_DEPTH);
+    this.camera.position.copy(pose.focus).addScaledVector(pose.direction, distance);
     this.camera.lookAt(pose.focus);
     this.transitionFocus = pose.focus;
 
@@ -188,14 +205,14 @@ export class CameraRig {
       const { onDone } = transition;
       this.transition = null;
       this.transitionFocus = null;
-      this.setFov(this.baseFov);
+      this.setProjection(this.baseFov, this.baseNear, this.baseFar);
       onDone?.();
     }
   }
 
-  private setFov(fov: number) {
-    if (this.camera.fov === fov) return;
-    this.camera.fov = fov;
+  private setProjection(fov: number, near: number, far: number) {
+    if (this.camera.fov === fov && this.camera.near === near && this.camera.far === far) return;
+    Object.assign(this.camera, { fov, near, far });
     this.camera.updateProjectionMatrix();
   }
 }
