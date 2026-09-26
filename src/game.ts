@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/Addons.js";
 import { type Box3DModule, type b3ShapeId, type b3Vec3 } from "box3d.js";
 import {
   createPhysicsDebugRenderer,
@@ -7,6 +6,7 @@ import {
   syncObjectToBody,
   type PhysicsDebugRenderer,
 } from "./box3d-three";
+import { CameraRig, type CameraView } from "./camera-rig";
 import { Aim, describeAim, MAX_ARROW_LENGTH, MIN_ARROW_LENGTH, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
 import { createTrajectoryPreview } from "./preview";
@@ -37,6 +37,12 @@ const PICK_DISTANCE = 100;
 const CLICK_SLOP_PX = 5;
 /** Strength multiplier per scroll notch or [ ] key press. */
 const STRENGTH_STEP = 1.1;
+const DOUBLE_CLICK_MS = 400;
+/** Initial camera position relative to the ragdoll, looking down on it. */
+const CAMERA_OFFSET = new THREE.Vector3(-2, 1.5, 4.5);
+/** While following, aim this far ahead along the ragdoll's velocity. */
+const LOOK_AHEAD_SECONDS = 0.15;
+const MAX_LOOK_AHEAD = 1;
 const DEFAULT_INVENTORY: Inventory = { force: 2, box: 1 };
 
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
@@ -97,18 +103,14 @@ export const Game = async ({
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
-  // Frame the ragdoll's spawn point so the player can start placing things.
   const spawnEntity = map.entities.find((e) => e.properties.classname === "info_player_start");
   const focus = (spawnEntity && getEntityWorldOrigin(spawnEntity)) ?? new THREE.Vector3();
   focus.y += 1;
   // Snapping and aim descriptions are relative to the way the ragdoll faces.
   const forwardYaw = spawnEntity ? getEntityWorldYaw(spawnEntity) : 0;
-  // Look down on the ragdoll so horizontal aiming isn't edge-on to the camera.
-  camera.position.copy(focus).add(new THREE.Vector3(-2, 2.5, 4.5));
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.copy(focus);
-  controls.update();
+  const rig = new CameraRig(camera, renderer.domElement);
+  const controls = rig.controls;
 
   const debugElement = document.createElement("div");
   debugElement.id = "debug";
@@ -208,6 +210,21 @@ export const Game = async ({
     return new THREE.Vector3(...out);
   };
 
+  /** The ragdoll's centre of mass, and its mass-weighted velocity. */
+  const ragdollMotion = () => {
+    const center = new THREE.Vector3();
+    const velocity = new THREE.Vector3();
+    const v: b3Vec3 = [0, 0, 0];
+    let totalMass = 0;
+    for (const body of simulation.ragdoll) {
+      const mass = b3.b3Body_GetMass(body);
+      center.addScaledVector(new THREE.Vector3(...b3.b3Body_GetWorldCenterOfMass(v, body)), mass);
+      velocity.addScaledVector(new THREE.Vector3(...b3.b3Body_GetLinearVelocity(v, body)), mass);
+      totalMass += mass;
+    }
+    return { center: center.divideScalar(totalMass), velocity: velocity.divideScalar(totalMass) };
+  };
+
   /** Throw away the world and rebuild it at its initial state from `placements`. */
   const rebuild = () => {
     simulation?.destroy();
@@ -297,7 +314,7 @@ export const Game = async ({
   };
 
   const clear = () => {
-    running = false;
+    stopRunning();
     selected = null;
     if (placements.length) commit([]);
     else rebuild();
@@ -315,9 +332,20 @@ export const Game = async ({
     updateHud();
   };
 
+  // The setup view to return to on reset.
+  let setupView: CameraView | null = null;
+
+  const stopRunning = () => {
+    if (!running) return;
+    running = false;
+    rig.follow(null);
+    if (setupView) rig.glideTo(setupView);
+  };
+
   const play = () => {
     if (running) return;
     cancelDrag();
+    setupView = rig.view;
     running = true;
     tool = null;
     selected = null;
@@ -327,7 +355,7 @@ export const Game = async ({
   };
 
   const reset = () => {
-    running = false;
+    stopRunning();
     rebuild();
   };
 
@@ -440,7 +468,7 @@ export const Game = async ({
   };
 
   const hint = () => {
-    if (running) return "Space to reset and try again";
+    if (running) return "Drag to orbit · scroll to zoom · Space to reset and try again";
     if (drag?.kind === "aim") return "Drag to aim across the floor · hold Shift to change height · hold Alt to aim without snapping";
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
     const current = selected !== null ? placements[selected] : null;
@@ -450,7 +478,7 @@ export const Game = async ({
     if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
     if (tool === "force") return "Drag out from a body part to add a force";
     if (tool === "box") return "Click a surface to place a box";
-    return "1: add a force · 2: add a box · click an arrow or box to edit it";
+    return "1: add a force · 2: add a box · click an arrow or box to edit it · double-click to look somewhere · F to recentre";
   };
 
   // --- Picking ----------------------------------------------------------------
@@ -627,6 +655,7 @@ export const Game = async ({
   // --- Input ------------------------------------------------------------------
 
   let pointerDownAt: { x: number; y: number } | null = null;
+  let lastClick: { time: number; x: number; y: number } | null = null;
   // Set when pointerdown already did something, so pointerup isn't also a click.
   let pointerDownHandled = false;
 
@@ -712,6 +741,14 @@ export const Game = async ({
       event.target === renderer.domElement &&
       Math.hypot(event.clientX - down.x, event.clientY - down.y) < CLICK_SLOP_PX;
     if (!isClick || running) return;
+    // The second click of a double-click only refocuses the camera.
+    const now = performance.now();
+    const isDouble =
+      lastClick !== null &&
+      now - lastClick.time < DOUBLE_CLICK_MS &&
+      Math.hypot(event.clientX - lastClick.x, event.clientY - lastClick.y) < CLICK_SLOP_PX;
+    lastClick = { time: now, x: event.clientX, y: event.clientY };
+    if (isDouble) return;
     setPointer(event);
     const hit = pick();
 
@@ -728,6 +765,17 @@ export const Game = async ({
     const ref = hit && simulation.refForBody(hit.body);
     const index = ref?.kind === "prop" ? placements.findIndex((p) => p.kind === "box" && p.id === ref.id) : -1;
     select(index >= 0 ? index : null);
+  });
+
+  // Double-click refocuses the camera: on the ragdoll, or on any other surface
+  // (e.g. to place a box further down the stairs).
+  renderer.domElement.addEventListener("dblclick", (event) => {
+    if (running) return;
+    setPointer(event);
+    const hit = pick();
+    if (!hit) return;
+    const ref = simulation.refForBody(hit.body);
+    rig.focusOn(ref?.kind === "ragdoll" ? ragdollMotion().center : hit.point);
   });
 
   // Scrolling over the selected arrow changes its strength instead of zooming.
@@ -772,6 +820,9 @@ export const Game = async ({
       case "KeyZ":
         undo();
         break;
+      case "KeyF":
+        if (!running) rig.focusOn(ragdollMotion().center);
+        break;
       case "Delete":
       case "Backspace":
         if (!running && !drag && selected !== null) removePlacement(selected);
@@ -801,6 +852,11 @@ export const Game = async ({
 
   rebuild();
 
+  // Start anchored on the ragdoll, looking down on it so horizontal aiming isn't
+  // edge-on to the camera.
+  const start = ragdollMotion().center;
+  rig.setView({ target: start, position: start.clone().add(CAMERA_OFFSET) });
+
   const trajectory = createTrajectoryPreview(b3, map, ragdollMeshes);
   scene.add(trajectory.object3d);
 
@@ -822,11 +878,14 @@ export const Game = async ({
     if (running) {
       simulation.step();
       syncVisuals();
+      const { center, velocity } = ragdollMotion();
+      rig.follow(center.add(velocity.multiplyScalar(LOOK_AHEAD_SECONDS).clampLength(0, MAX_LOOK_AHEAD)));
     } else if (previewEnabled && previewDirty) {
       trajectory.update(draft());
       previewDirty = false;
     }
     trajectory.object3d.visible = !running && previewEnabled;
+    rig.update(Math.min(dt, 100) / 1000);
 
     renderer.render(scene, camera);
     debugElement.innerText = debugInfo({ dt });
