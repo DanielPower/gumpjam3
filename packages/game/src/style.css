@@ -470,6 +470,15 @@ canvas {
   touch-action: none;
 }
 
+/* The game fills the screen, whatever its size; the game resizes what it draws to match. */
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /*
  * Short screens, e.g. phones held sideways: keep text and buttons big enough
  * to read and tap.

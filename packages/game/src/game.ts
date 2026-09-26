@@ -167,9 +167,11 @@ export const Game = ({
   // Render at the display's pixel density (capped, for performance) so the
   // scene is sharp on high-DPI screens.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  // CSS makes the canvas fill the screen; this only sizes what's drawn in it (see `resize`).
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.id = "game-canvas";
   root.appendChild(renderer.domElement);
 
   const spawnEntity = map.entities.find((e) => e.properties.classname === "info_player_start");
@@ -1509,13 +1511,25 @@ export const Game = ({
     }
   }, { signal });
 
-  window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    iso.resize();
+  /**
+   * Fit the rendering to the canvas as it's laid out now. Watching the canvas
+   * itself catches every change to its size, not just window resizes: docking
+   * developer tools, rotating a phone, its browser bars showing and hiding.
+   */
+  const resize = () => {
+    const canvas = renderer.domElement;
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  }, { signal });
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    // After the canvas has its new size, which the edit camera reads.
+    if (iso) iso.resize();
+  };
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(renderer.domElement);
+  signal.addEventListener("abort", () => resizeObserver.disconnect());
 
   rebuild();
 
