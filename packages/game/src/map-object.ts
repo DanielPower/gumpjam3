@@ -23,6 +23,18 @@ const TEXTURE_COLORS: Record<string, number> = {
   blue: 0x3b78d8,
   yellow: 0xf2b830,
   white: 0xf2f2f2,
+  stone: 0xd8cbb3,
+  stone_dark: 0x9c8f7a,
+  paving: 0xc4b59a,
+  rock: 0x7a6e62,
+  marble: 0xeee8dc,
+  gold: 0xd9a93a,
+  terracotta: 0xc0643f,
+  iron: 0x3a3d42,
+  lantern: 0xffcf6b,
+  water: 0x3f8fc9,
+  bark: 0x6b4a2f,
+  leaves: 0x4f8f3a,
 };
 
 const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
