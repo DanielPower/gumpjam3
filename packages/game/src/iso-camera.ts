@@ -42,12 +42,11 @@ export type SurfacePicker = (ray: THREE.Ray) => THREE.Vector3 | null;
  * any zoom level. A twist pivots between the fingers, so the scene turns
  * under them.
  *
- * Mouse rotation pivots on the point at the centre of the view at a remembered
- * height, not on whatever surface happens to be there. Rotating keeps that
- * point centred, so the next rotation turns around the same spot even if a
- * taller or shorter object has swung into the middle. The height is only
- * re-read from the scene when the player moves the view on purpose (panning,
- * or centring on something).
+ * Mouse rotation pivots on whatever was grabbed: the scene turns around the
+ * vertical line through the point under the cursor, so that point stays put.
+ * Grabbing empty space (the sky) pivots instead on the point at the centre of
+ * the view at a remembered height, the height of the last thing grabbed or
+ * centred on, so repeated rotations there turn around the same spot.
  */
 export class IsometricCamera {
   readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, DISTANCE * 4);
@@ -103,7 +102,12 @@ export class IsometricCamera {
         event.pointerType === "touch" || event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
       if (!mode) return;
       this.glide = null;
-      const pivot = mode === "rotate" ? this.pivot() : this.focus;
+      let pivot = this.focus;
+      if (mode === "rotate") {
+        const grabbed = this.pickSurface(this.rayAt(event.clientX, event.clientY));
+        if (grabbed) this.pivotHeight = grabbed.y;
+        pivot = grabbed ?? this.pivot();
+      }
       this.drag = { mode, button: event.button, x: event.clientX, y: event.clientY, pivot };
       domElement.setPointerCapture(event.pointerId);
     });
@@ -268,9 +272,17 @@ export class IsometricCamera {
   }
 
   private rotate(dx: number, pivot: THREE.Vector3) {
-    this.yaw -= dx * ROTATE_SPEED;
+    this.turnAround(pivot, -dx * ROTATE_SPEED);
+  }
+
+  /** Turn by `angle` (radians) around the vertical line through `pivot`, which stays where it is on screen. */
+  private turnAround(pivot: THREE.Vector3, angle: number) {
+    this.yaw += angle;
     this.updateDirection();
-    this.lookFrom(pivot);
+    const offset = this.camera.position.clone().sub(pivot).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+    this.camera.position.copy(pivot).add(offset);
+    this.camera.lookAt(this.camera.position.clone().sub(this.direction));
+    this.camera.updateMatrixWorld();
   }
 
   /**
@@ -280,13 +292,7 @@ export class IsometricCamera {
   private twistAt(clientX: number, clientY: number, angle: number) {
     if (angle === 0) return;
     const pivot = this.rayAt(clientX, clientY).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.twistHeight), new THREE.Vector3());
-    if (!pivot) return;
-    this.yaw += angle;
-    this.updateDirection();
-    const offset = this.camera.position.clone().sub(pivot).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-    this.camera.position.copy(pivot).add(offset);
-    this.camera.lookAt(this.camera.position.clone().sub(this.direction));
-    this.camera.updateMatrixWorld();
+    if (pivot) this.turnAround(pivot, angle);
   }
 
   private pan(dx: number, dy: number) {
