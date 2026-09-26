@@ -25,7 +25,7 @@ import {
   syncObjectToBody,
   type PhysicsDebugRenderer,
 } from "./box3d-three";
-import { CameraRig } from "./camera-rig";
+import { CameraRig, type OrthographicView } from "./camera-rig";
 import { IsometricCamera, yawFacingMapAngle } from "./iso-camera";
 import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
 import { AimGuides } from "./aim-guides";
@@ -482,19 +482,20 @@ export const Game = async ({
     activeCamera = editing ? iso.camera : camera;
   };
 
+  /** Where the edit camera goes back to after a run. */
+  let editViewBeforeRun: OrthographicView = { focus: new THREE.Vector3(), direction: new THREE.Vector3(0, 1, 0), viewHeight: 8 };
+
   const stopRunning = () => {
     if (!running) return;
     running = false;
     for (const flash of flashes) flash.remaining = 0;
     damagePanel.update(run?.damage ?? noDamage, "Last run");
     leaderboard?.withdraw();
-    // Ease back to the edit camera right where the run left off, keeping the
-    // horizontal rotation and framing. It takes over once the transition ends.
+    // Ease back to the edit camera centred on the ragdoll's starting spot, where
+    // it's about to be reset to, turned and zoomed as it was before the run.
+    // It takes over once the transition ends.
     rig.follow(null);
-    const view = rig.orthographicView;
-    // A ragdoll flung off the level ends the run in empty space, so stay within
-    // the level: settle on the nearest part of it instead.
-    view.focus.clamp(level.bounds.min, level.bounds.max);
+    const view = editViewBeforeRun;
     iso.setView(view.focus, view.direction, view.viewHeight);
     rig.transitionTo({ focus: view.focus, direction: iso.direction, viewHeight: iso.viewHeight }, () =>
       useEditCamera(true),
@@ -507,6 +508,7 @@ export const Game = async ({
     // Start the follow camera looking from the same direction as the edit view.
     // Ease from the edit view into it, rather than cutting straight to the ragdoll.
     const center = ragdollMotion().center;
+    editViewBeforeRun = { focus: center.clone(), direction: iso.direction.clone(), viewHeight: iso.viewHeight };
     rig.transitionInto(
       { target: center, position: center.clone().addScaledVector(iso.direction, RUN_CAMERA_DISTANCE) },
       { focus: iso.viewCenter(), viewHeight: iso.viewHeight, direction: iso.direction },
@@ -652,11 +654,13 @@ export const Game = async ({
   }
 
   const hint = () => {
-    if (running && run?.finished) return "Run over · Space to reset and try again";
-    if (running) return "Drag to orbit · scroll to zoom · Space to reset and try again";
+    const touch = pointerType !== "mouse";
+    const tap = touch ? "Tap" : "Click";
+    if (running && run?.finished) return "Run over · reset to try again";
+    if (running) return touch ? "Drag to orbit · pinch to zoom" : "Drag to orbit · scroll to zoom";
     if (drag?.kind === "aim") {
       const hints: Record<AimMode, string> = {
-        create: "Drag to aim, further out for more strength · hold Alt to aim without snapping",
+        create: "Drag to aim, further out for more strength",
         heading: "Drag round to turn the force",
         tilt: "Drag up or down to tilt the force",
         length: "Drag along the arrow for more or less strength",
@@ -666,16 +670,18 @@ export const Game = async ({
     if (drag?.kind === "move") return "Drag across a body to move where the force pushes";
     const current = selected !== null ? placements[selected] : null;
     if (current?.kind === "force") {
-      return "Drag the white arrows for strength · the blue arrows to turn · the pink arrows to tilt · the base to move it · Delete to remove";
+      return "Drag the white arrows for strength · the blue arrows to turn · the pink arrows to tilt · the base to move it";
     }
-    if (current?.kind === "box") return "Delete to remove this box · Esc to deselect";
-    if (current?.kind === "mine") return "Delete to remove this mine · Esc to deselect";
-    if (current?.kind === "bait") return "The rat charges on this line when the body approaches · Delete to move bait · Esc to deselect";
+    if (current?.kind === "box") return "Box selected";
+    if (current?.kind === "mine") return "Mine selected";
+    if (current?.kind === "bait") return "The rat charges along this line when the body approaches";
     if (tool === "force") return "Drag out from a body part to add a force";
-    if (tool === "box") return "Click a surface to place a box";
-    if (tool === "mine") return "Click a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives";
+    if (tool === "box") return `${tap} a surface to place a box`;
+    if (tool === "mine") return `${tap} a surface to place a mine · anything that touches it sets it off, and blasts set off other explosives`;
     if (tool === "bait") return "Place bait on the sewer floor · the rat waits for the body, then charges along the dashed line";
-    return "Choose an item to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom · F to recentre";
+    return touch
+      ? "Choose an item to set up the run · tap a placed item to select it · drag to pan · pinch to zoom · twist two fingers to rotate"
+      : "Choose an item to set up the run · click a placed item to select it · drag to rotate · right-drag to pan · scroll to zoom";
   };
 
   // --- Picking ----------------------------------------------------------------
@@ -686,8 +692,11 @@ export const Game = async ({
   const modifiers = { alt: false };
   const pointer = { x: 0, y: 0 };
 
-  // Fingers need bigger targets than a mouse pointer.
-  let pointerType = "mouse";
+  // Fingers need bigger targets than a mouse pointer, and different tips. Go
+  // by whatever was used last (starting from the device's main pointer), so
+  // touchscreen laptops follow along.
+  let pointerType = window.matchMedia("(pointer: coarse)").matches ? "touch" : "mouse";
+  window.addEventListener("pointerdown", (event) => (pointerType = event.pointerType), { capture: true });
   const pickPixels = () => (pointerType === "touch" ? 24 : 12);
 
   const setPointer = (event: MouseEvent) => {

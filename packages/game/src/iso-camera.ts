@@ -32,12 +32,15 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 
 export type SurfacePicker = (ray: THREE.Ray) => THREE.Vector3 | null;
 
 /**
- * Isometric orthographic camera for the edit phase: left-drag (or one finger)
- * to rotate around the vertical axis, right-drag (or two fingers) to pan,
- * scroll (or pinch) to zoom towards the cursor.
+ * Isometric orthographic camera for the edit phase, rotating only around the
+ * vertical axis.
+ * - Mouse: left-drag to rotate, right-drag to pan, scroll to zoom towards the cursor.
+ * - Touch: drag to pan; with two fingers, move to pan, pinch to zoom, and
+ *   twist to rotate.
  * Panning moves the camera in its view plane by exactly the world distance
- * under the pointer, so what you grab stays under the cursor at any zoom level.
- * Rotation pivots on whatever is at the centre of the view.
+ * under the pointer, so what you grab stays under the cursor (or fingers) at
+ * any zoom level. Mouse rotation pivots on whatever is at the centre of the
+ * view; a twist pivots between the fingers, so the scene turns under them.
  */
 export class IsometricCamera {
   readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, DISTANCE * 4);
@@ -49,10 +52,12 @@ export class IsometricCamera {
   private yaw: number;
   /** The camera looks back along this, from the view towards the camera. */
   readonly direction = new THREE.Vector3();
-  private drag: { mode: "pan" | "rotate"; x: number; y: number; pivot: THREE.Vector3 } | null = null;
-  /** Fingers on the screen, for two-finger pan and pinch zoom. */
+  private drag: { mode: "pan" | "rotate"; button: number; x: number; y: number; pivot: THREE.Vector3 } | null = null;
+  /** Fingers on the screen, for two-finger pan, pinch zoom and twist. */
   private readonly touches = new Map<number, { x: number; y: number }>();
-  private pinch: { x: number; y: number; distance: number } | null = null;
+  private pinch: { x: number; y: number; distance: number; angle: number } | null = null;
+  /** A twist turns around the vertical line through the point between the fingers, at this height. */
+  private twistHeight = 0;
   private glide: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number } | null = null;
 
   constructor(
@@ -75,18 +80,21 @@ export class IsometricCamera {
       if (event.pointerType === "touch") {
         this.touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
         if (this.touches.size === 2) {
-          // A second finger turns a one-finger rotate into pan and pinch.
+          // A second finger turns a one-finger pan into pan, pinch and twist.
           this.drag = null;
           this.pinch = this.twoFingers();
+          this.twistHeight = (this.pickSurface(this.rayAt(this.pinch.x, this.pinch.y)) ?? this.focus).y;
           return;
         }
       }
       if (this.drag || this.pinch) return;
-      const mode = event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
+      // One finger pans, since it can't right-drag and rotating is a twist.
+      const mode =
+        event.pointerType === "touch" || event.button === PAN_BUTTON ? "pan" : event.button === ROTATE_BUTTON ? "rotate" : null;
       if (!mode) return;
       this.glide = null;
       const pivot = mode === "rotate" ? this.viewCenter() : this.focus;
-      this.drag = { mode, x: event.clientX, y: event.clientY, pivot };
+      this.drag = { mode, button: event.button, x: event.clientX, y: event.clientY, pivot };
       domElement.setPointerCapture(event.pointerId);
     });
     domElement.addEventListener("pointermove", (event) => {
@@ -95,6 +103,9 @@ export class IsometricCamera {
         const now = this.twoFingers();
         this.pan(now.x - this.pinch.x, now.y - this.pinch.y);
         if (this.pinch.distance > 0) this.zoomAt(now.x, now.y, now.distance / this.pinch.distance);
+        // Wrapped to ±π, so crossing the angle's seam doesn't spin the view.
+        const twist = Math.atan2(Math.sin(now.angle - this.pinch.angle), Math.cos(now.angle - this.pinch.angle));
+        this.twistAt(now.x, now.y, twist);
         this.pinch = now;
         return;
       }
@@ -110,8 +121,7 @@ export class IsometricCamera {
       this.touches.delete(event.pointerId);
       if (this.touches.size < 2) this.pinch = null;
       if (!this.drag) return;
-      const button = this.drag.mode === "pan" ? PAN_BUTTON : ROTATE_BUTTON;
-      if (event.type === "pointerup" && event.button !== button) return;
+      if (event.type === "pointerup" && event.button !== this.drag.button) return;
       this.drag = null;
       if (domElement.hasPointerCapture(event.pointerId)) domElement.releasePointerCapture(event.pointerId);
     };
@@ -128,10 +138,25 @@ export class IsometricCamera {
     );
   }
 
-  /** Where the first two fingers are centred, and how far apart they are. */
+  /** Where the first two fingers are centred, how far apart they are, and the angle between them. */
   private twoFingers() {
     const [a, b] = [...this.touches.values()];
-    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, distance: Math.hypot(a.x - b.x, a.y - b.y) };
+    return {
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      distance: Math.hypot(a.x - b.x, a.y - b.y),
+      angle: Math.atan2(b.y - a.y, b.x - a.x),
+    };
+  }
+
+  /** The ray through the camera at a screen point. */
+  private rayAt(clientX: number, clientY: number) {
+    const rect = this.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.camera.updateMatrixWorld();
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.camera);
+    return raycaster.ray;
   }
 
   /** The point at the centre of the view, DISTANCE in front of the camera. */
@@ -213,6 +238,22 @@ export class IsometricCamera {
     this.yaw -= dx * ROTATE_SPEED;
     this.updateDirection();
     this.lookFrom(pivot);
+  }
+
+  /**
+   * Turn the view by `angle` (radians, clockwise on screen) around the
+   * vertical line through what's under (clientX, clientY), so it stays put.
+   */
+  private twistAt(clientX: number, clientY: number, angle: number) {
+    if (angle === 0) return;
+    const pivot = this.rayAt(clientX, clientY).intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.twistHeight), new THREE.Vector3());
+    if (!pivot) return;
+    this.yaw += angle;
+    this.updateDirection();
+    const offset = this.camera.position.clone().sub(pivot).applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+    this.camera.position.copy(pivot).add(offset);
+    this.camera.lookAt(this.camera.position.clone().sub(this.direction));
+    this.camera.updateMatrixWorld();
   }
 
   private pan(dx: number, dy: number) {
