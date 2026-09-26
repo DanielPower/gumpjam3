@@ -1,27 +1,31 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
-const LEVEL_PREFIX = "virtual:level/";
+const LEVELS_ID = "virtual:levels";
 
 /**
- * Serve TrenchBroom maps from @stairs/shared as `virtual:level/<id>` modules
- * exporting the map text. Importing the .map files directly doesn't work: Vite's
- * dev server treats any request ending in .map as a source map.
+ * Serve every TrenchBroom map in @stairs/shared/levels as one `virtual:levels`
+ * module: an object of level id (file name) to map text. Importing the .map
+ * files directly doesn't work: Vite's dev server treats any request ending in
+ * .map as a source map.
  */
 function levels(): Plugin {
+  const dir = fileURLToPath(new URL("./", import.meta.resolve("@stairs/shared/levels/level1.map")));
   return {
     name: "stairs-levels",
     resolveId(id) {
-      if (id.startsWith(LEVEL_PREFIX)) return `\0${id}`;
+      if (id === LEVELS_ID) return `\0${id}`;
     },
     load(id) {
-      if (!id.startsWith(`\0${LEVEL_PREFIX}`)) return;
-      const level = id.slice(LEVEL_PREFIX.length + 1);
-      if (!/^[\w-]+$/.test(level)) throw new Error(`Invalid level id '${level}'`);
-      const path = fileURLToPath(import.meta.resolve(`@stairs/shared/levels/${level}.map`));
-      this.addWatchFile(path);
-      return `export default ${JSON.stringify(readFileSync(path, "utf8"))};`;
+      if (id !== `\0${LEVELS_ID}`) return;
+      const levels: Record<string, string> = {};
+      for (const file of readdirSync(dir).filter((f) => f.endsWith(".map")).sort()) {
+        this.addWatchFile(join(dir, file));
+        levels[file.slice(0, -".map".length)] = readFileSync(join(dir, file), "utf8");
+      }
+      return `export default ${JSON.stringify(levels)};`;
     },
   };
 }

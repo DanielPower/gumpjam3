@@ -1,5 +1,5 @@
-/** A TrenchBroom map from @stairs/shared/levels, as text. See vite.config.ts. */
-declare module "virtual:level/*" {
-  const source: string;
-  export default source;
+/** Every TrenchBroom map in @stairs/shared/levels, as text, keyed by level id. See vite.config.ts. */
+declare module "virtual:levels" {
+  const levels: Record<string, string>;
+  export default levels;
 }

@@ -1,14 +1,15 @@
 import type { Box3DModule, b3BodyId, b3ShapeId, b3Vec3, b3WorldId } from "box3d.js";
+import { levelSolids, pathProgress, type SurfaceMaterial } from "./level-entities";
 import { createHuman } from "./ragdoll";
 import {
-  createMapCollisionObjects,
   getEntityWorldOrigin,
   getEntityWorldYaw,
+  type BrushGeometry,
   type TrenchBroomMap,
 } from "./trenchbroom-map";
 
 /** Change in velocity (m/s) applied per metre of force-vector arrow. */
-export const VELOCITY_PER_METER = 6;
+export const VELOCITY_PER_METER = 9;
 export const TIME_STEP = 1 / 60;
 const SUB_STEPS = 4;
 export const BOX_HALF_EXTENTS: b3Vec3 = [0.25, 0.25, 0.25];
@@ -55,6 +56,8 @@ export type Simulation = {
   world: b3WorldId;
   /** Ragdoll bodies, indexed by bone. */
   ragdoll: b3BodyId[];
+  /** Moving level bodies, in the same order as levelSolids(map).movers. */
+  movers: b3BodyId[];
   /** Prop bodies keyed by their placement's id. */
   props: Map<number, b3BodyId>;
   resolve(ref: BodyRef): b3BodyId;
@@ -93,7 +96,53 @@ export function createSimulation(
     gravity: [0, -9.8, 0],
     hitEventThreshold: HIT_SPEED_THRESHOLD,
   });
-  createMapCollisionObjects(b3, world, map);
+
+  // Level geometry: static solids, then kinematic movers driven by the step count.
+  const solids = levelSolids(map);
+  const addBrushes = (body: b3BodyId, brushes: BrushGeometry[], material: SurfaceMaterial | null) => {
+    const shapeDef = b3.b3DefaultShapeDef();
+    if (material) {
+      shapeDef.baseMaterial.restitution = material.restitution;
+      shapeDef.baseMaterial.friction = material.friction;
+    }
+    for (const brush of brushes) {
+      const hull = b3.b3CreateHull(brush.vertices.flatMap((v) => v.toArray()));
+      if (hull === null) throw new Error("Box3D could not create a hull for a map brush");
+      b3.b3CreateHullShape(body, shapeDef, hull);
+      hull.delete();
+    }
+  };
+  const levelBody = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
+  for (const solid of solids.statics) addBrushes(levelBody, solid.brushes, solid.material);
+
+  const movers = solids.movers.map((mover) => {
+    const bodyDef = b3.b3DefaultBodyDef();
+    bodyDef.type = b3.b3BodyType.b3_kinematicBody;
+    const start = mover.motion.kind === "path"
+      ? mover.pivot.clone().addScaledVector(mover.motion.offset, pathProgress(mover.motion, 0))
+      : mover.pivot;
+    bodyDef.position = start.toArray();
+    if (mover.motion.kind === "rotate") bodyDef.angularVelocity = mover.motion.angularVelocity.toArray();
+    const body = b3.b3CreateBody(world, bodyDef);
+    addBrushes(body, mover.brushes, null);
+    return body;
+  });
+  let stepCount = 0;
+
+  /** Drive path movers so they reach where they should be at the end of the next step. */
+  const driveMovers = () => {
+    const identity: [number, number, number, number] = [0, 0, 0, 1];
+    solids.movers.forEach(({ motion, pivot }, i) => {
+      if (motion.kind !== "path") return;
+      const now = pathProgress(motion, stepCount * TIME_STEP);
+      const next = pathProgress(motion, (stepCount + 1) * TIME_STEP);
+      const at = (progress: number) => pivot.clone().addScaledVector(motion.offset, progress).toArray();
+      // A loop that wraps round jumps back to the start instead of sweeping
+      // back along the path: teleport to one step's travel before `next`.
+      if (motion.loop && next < now) b3.b3Body_SetTransform(movers[i], at(next - (next + 1 - now)), identity);
+      b3.b3Body_SetTargetTransform(movers[i], { position: at(next), quaternion: identity }, TIME_STEP, true);
+    });
+  };
 
   const refs = new Map<string, BodyRef>();
   let ragdoll: b3BodyId[] = [];
@@ -189,12 +238,17 @@ export function createSimulation(
   return {
     world,
     ragdoll,
+    movers,
     props,
     resolve,
     refForBody: (body) => refs.get(bodyKey(body)) ?? null,
     applyForces,
     boxOverlaps,
-    step: () => b3.b3World_Step(world, TIME_STEP, SUB_STEPS),
+    step: () => {
+      driveMovers();
+      b3.b3World_Step(world, TIME_STEP, SUB_STEPS);
+      stepCount++;
+    },
     ragdollHits,
     destroy: () => {
       if (events) b3.destroyEventsBuffer(events);

@@ -4,6 +4,7 @@ import Box3D from "box3d.js";
 import { createApp } from "./app";
 import { openScoreStore } from "./db";
 import { loadLevels } from "./levels";
+import { rescoreOutdated } from "./rescore";
 
 const port = Number(process.env.PORT ?? 3000);
 const levelsDir = process.env.LEVELS_DIR ?? fileURLToPath(new URL("../../shared/levels/", import.meta.url));
@@ -15,6 +16,8 @@ const corsOrigin = !corsEnv || corsEnv === "*" ? "*" : corsEnv.split(",").map((o
 const b3 = await Box3D();
 const levels = loadLevels(levelsDir);
 const scores = openScoreStore(databasePath);
+const { rescored, removed } = rescoreOutdated(b3, levels, scores);
+if (rescored || removed) console.log(`Re-scored ${rescored} entries under the current rules; removed ${removed} no longer valid`);
 const app = createApp({ b3, levels, scores, corsOrigin });
 
 const server = serve({ fetch: app.fetch, port }, ({ port }) => {

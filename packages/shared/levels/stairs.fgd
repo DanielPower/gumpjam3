@@ -1,0 +1,43 @@
+// Entity definitions for Stairs levels. In TrenchBroom, load this under
+// Map > Entity Definitions (or Preferences for the game config) to get these
+// entities in the entity browser with their properties.
+
+@SolidClass = worldspawn : "World" [
+	message(string) : "Level name shown in the game"
+	inventory_force(integer) : "Force vectors the player can place" : 2
+	inventory_box(integer) : "Boxes the player can place" : 1
+	run_quiet_seconds(string) : "A run ends after this many seconds without damage" : "3"
+	sky(string) : "Sky colour, e.g. #9ecbf2"
+]
+
+@PointClass size(-16 -16 0, 16 16 56) color(0 200 0) = info_player_start : "Where the ragdoll stands; its feet are at the origin" [
+	angle(integer) : "Facing (compass angle)" : 0
+]
+
+@PointClass size(-8 -8 -8, 8 8 8) color(255 200 0) = info_edit_camera : "What the edit camera looks at when the level starts" [
+	angle(integer) : "Facing (compass angle)" : 45
+	view(string) : "Metres of the level visible top to bottom" : "8"
+]
+
+@SolidClass = func_group : "Group of static brushes" []
+@SolidClass = func_detail : "Static detail brushes" []
+
+@SolidClass = func_bouncy : "Springy static surface" [
+	restitution(string) : "Bounciness; above 1 adds energy" : "1.1"
+	friction(string) : "Friction" : "0.6"
+]
+
+@SolidClass = func_rotating : "Spins forever about a vertical axis" [
+	origin(string) : "Pivot (map units); defaults to the centre of the brushes"
+	speed(string) : "Degrees per second; negative spins the other way" : "90"
+]
+
+@SolidClass = func_mover : "Travels along a path, driven by the run's clock" [
+	move(string) : "Offset to travel, in map units" : "0 0 0"
+	speed(string) : "Map units per second" : "256"
+	mode(choices) : "At the end of the path" : "loop" = [
+		"loop" : "Jump back to the start (hide the jump inside geometry)"
+		"pingpong" : "Travel back again"
+	]
+	phase(string) : "How far along its cycle it starts, 0-1" : "0"
+]

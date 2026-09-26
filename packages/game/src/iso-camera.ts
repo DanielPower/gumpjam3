@@ -2,7 +2,17 @@ import * as THREE from "three";
 
 /** Isometric elevation: equal angles to all three axes (35.26°). Never changes. */
 const PITCH = Math.asin(1 / Math.sqrt(3));
-const START_YAW = -Math.PI / 4;
+/**
+ * Convert a map compass angle (degrees, as for an entity's "angle": 0 faces map
+ * +X, 90 faces map +Y) that the camera should face into this camera's yaw.
+ */
+export function yawFacingMapAngle(degrees: number) {
+  const a = THREE.MathUtils.degToRad(degrees);
+  // Map (cos a, sin a) is world (cos a, 0, -sin a); the camera sits opposite.
+  return Math.atan2(-Math.cos(a), Math.sin(a));
+}
+/** Facing map angle 45°: looking up level 1's stairs from their lower side. */
+const DEFAULT_YAW = yawFacingMapAngle(45);
 /** Radians of rotation per pixel dragged horizontally. */
 const ROTATE_SPEED = 0.006;
 /** How far back the camera sits. Orthographic, so this only affects clipping. */
@@ -35,14 +45,21 @@ export class IsometricCamera {
 
   private readonly domElement: HTMLElement;
   private readonly pickSurface: SurfacePicker;
-  private yaw = START_YAW;
+  private yaw: number;
   /** The camera looks back along this, from the view towards the camera. */
   readonly direction = new THREE.Vector3();
   private drag: { mode: "pan" | "rotate"; x: number; y: number; pivot: THREE.Vector3 } | null = null;
   private glide: { from: THREE.Vector3; to: THREE.Vector3; elapsed: number } | null = null;
 
-  constructor(domElement: HTMLElement, focus: THREE.Vector3, pickSurface: SurfacePicker) {
+  constructor(
+    domElement: HTMLElement,
+    focus: THREE.Vector3,
+    pickSurface: SurfacePicker,
+    { yaw = DEFAULT_YAW, viewHeight = VIEW_HEIGHT }: { yaw?: number; viewHeight?: number } = {},
+  ) {
     this.domElement = domElement;
+    this.yaw = yaw;
+    this.camera.zoom = THREE.MathUtils.clamp(VIEW_HEIGHT / viewHeight, MIN_ZOOM, MAX_ZOOM);
     this.pickSurface = pickSurface;
     this.updateDirection();
     this.lookFrom(focus);

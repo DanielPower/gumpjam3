@@ -4,6 +4,7 @@
 // entity 0
 {
 "classname" "worldspawn"
+"message" "The Stairs"
 "inventory_force" "2"
 "inventory_box" "3"
 // brush 0

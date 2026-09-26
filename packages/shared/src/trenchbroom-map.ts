@@ -1,11 +1,5 @@
 // Source: AI generated with GPT-5.6-Sol
 
-import type {
-  Box3DModule,
-  b3BodyId,
-  b3ShapeId,
-  b3WorldId,
-} from "box3d.js";
 import * as THREE from "three";
 
 export type MapVector = readonly [number, number, number];
@@ -31,11 +25,6 @@ export type TrenchBroomMap = {
   entities: TrenchBroomEntity[];
 };
 
-export type MapCollisionObjects = {
-  body: b3BodyId;
-  shapes: b3ShapeId[];
-};
-
 export type MapBuildOptions = {
   /** Conversion from TrenchBroom units to metres. */
   unitsToMeters?: number;
@@ -51,10 +40,11 @@ type Plane = {
   distance: number;
 };
 
-/** A convex brush in world space: vertices, and faces as vertex index loops. */
+/** A convex brush in world space: vertices, faces as vertex index loops, and each face's texture name. */
 export type BrushGeometry = {
   vertices: THREE.Vector3[];
   faces: number[][];
+  textures: string[];
 };
 
 const DEFAULT_UNITS_TO_METERS = 1 / 32;
@@ -220,30 +210,19 @@ function intersectPlanes(a: Plane, b: Plane, c: Plane): THREE.Vector3 | null {
 }
 
 function buildBrushGeometry(brush: TrenchBroomBrush, scale: number): BrushGeometry {
-  const interior = new THREE.Vector3();
-  for (const face of brush.faces) {
-    for (const point of face.points) interior.add(new THREE.Vector3(...point));
-  }
-  interior.divideScalar(brush.faces.length * 3);
-
+  // Quake map winding: a face's outward normal is (p3 - p1) x (p2 - p1), so the
+  // brush interior is the negative half-space of every plane.
   const planes = brush.faces.map(({ points }) => {
     const a = new THREE.Vector3(...points[0]);
     const b = new THREE.Vector3(...points[1]);
     const c = new THREE.Vector3(...points[2]);
     const normal = new THREE.Vector3().crossVectors(
-      b.clone().sub(a),
       c.clone().sub(a),
+      b.clone().sub(a),
     );
     if (normal.lengthSq() < 1e-12) throw new Error("Brush contains a degenerate face");
     normal.normalize();
-    let distance = normal.dot(a);
-
-    // Normalize all planes so the brush interior is the negative half-space.
-    if (normal.dot(interior) > distance) {
-      normal.negate();
-      distance = -distance;
-    }
-    return { normal, distance };
+    return { normal, distance: normal.dot(a) };
   });
 
   const mapVertices: THREE.Vector3[] = [];
@@ -293,37 +272,31 @@ function buildBrushGeometry(brush: TrenchBroomBrush, scale: number): BrushGeomet
   return {
     vertices: mapVertices.map((point) => mapToWorld(point, scale)),
     faces,
+    textures: brush.faces.map((face) => face.texture),
   };
 }
 
 /** World-space geometry for every brush in the map. */
 export function mapBrushGeometry(map: TrenchBroomMap, options: MapBuildOptions = {}): BrushGeometry[] {
-  const scale = options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS;
-  return map.entities.flatMap((entity) =>
-    entity.brushes.map((brush) => buildBrushGeometry(brush, scale)),
-  );
+  return map.entities.flatMap((entity) => entityBrushGeometry(entity, options));
 }
 
-/** Build static Box3D convex-hull collision shapes for every map brush. */
-export function createMapCollisionObjects(
-  b3: Box3DModule,
-  world: b3WorldId,
-  map: TrenchBroomMap,
-  options: MapBuildOptions = {},
-): MapCollisionObjects {
-  const body = b3.b3CreateBody(world, b3.b3DefaultBodyDef());
-  b3.b3Body_SetName(body, "TrenchBroom map");
-  const shapes: b3ShapeId[] = [];
+/** World-space geometry for one entity's brushes. */
+export function entityBrushGeometry(entity: TrenchBroomEntity, options: MapBuildOptions = {}): BrushGeometry[] {
+  const scale = options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS;
+  return entity.brushes.map((brush) => buildBrushGeometry(brush, scale));
+}
 
-  for (const brush of mapBrushGeometry(map, options)) {
-    const points = brush.vertices.flatMap((point) => point.toArray());
-    const hull = b3.b3CreateHull(points);
-    if (hull === null) throw new Error("Box3D could not create a hull for a map brush");
-    shapes.push(b3.b3CreateHullShape(body, b3.b3DefaultShapeDef(), hull));
-    hull.delete();
-  }
+/** Convert a vector property in map units and axes (e.g. "0 -1792 0") to world space. */
+export function mapVectorToWorld(value: string | undefined, options: MapBuildOptions = {}): THREE.Vector3 | null {
+  const parts = value?.trim().split(/\s+/).map(Number);
+  if (parts === undefined || parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+  return mapToWorld(new THREE.Vector3(parts[0], parts[1], parts[2]), options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS);
+}
 
-  return { body, shapes };
+/** Map units to metres. */
+export function mapUnitsToMeters(value: number, options: MapBuildOptions = {}) {
+  return value * (options.unitsToMeters ?? DEFAULT_UNITS_TO_METERS);
 }
 
 /** Read an entity's TrenchBroom origin and convert it to world coordinates. */

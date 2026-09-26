@@ -8,11 +8,11 @@ import {
   type LeaderboardResponse,
   type SubmitScoreResponse,
 } from "@stairs/shared/api";
-import type { Level } from "@stairs/shared/level";
 import { simulateRun } from "@stairs/shared/run";
 import { TIME_STEP } from "@stairs/shared/simulation";
 import { parsePlacements, PlacementError, validatePlacements } from "@stairs/shared/validation";
 import type { ScoreStore } from "./db";
+import type { ServerLevel } from "./levels";
 
 const DEFAULT_LEADERBOARD_SIZE = 10;
 const MAX_LEADERBOARD_SIZE = 100;
@@ -20,7 +20,7 @@ const MAX_BODY_BYTES = 32 * 1024;
 
 export type AppOptions = {
   b3: Box3DModule;
-  levels: Map<string, Level>;
+  levels: Map<string, ServerLevel>;
   scores: ScoreStore;
   /** Allowed CORS origins; "*" allows any. */
   corsOrigin?: string | string[];
@@ -90,7 +90,7 @@ export function createApp({ b3, levels, scores, corsOrigin = "*" }: AppOptions) 
       console.warn(`Score mismatch on ${levelId}: client claimed ${claimedScore}, server got ${score}`);
     }
 
-    const { id, rank } = scores.add({ level: levelId, name, score, damage, placements });
+    const { id, rank } = scores.add({ level: levelId, name, score, damage, placements, rules: level.rules });
     return c.json<SubmitScoreResponse>({ id, score, rank, damage }, 201);
   });
 

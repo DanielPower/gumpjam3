@@ -16,7 +16,7 @@ import {
   type Simulation,
 } from "@stairs/shared/simulation";
 import { getEntityWorldOrigin, getEntityWorldYaw } from "@stairs/shared/trenchbroom-map";
-import level1Source from "virtual:level/level1";
+import levelSources from "virtual:levels";
 import {
   createPhysicsDebugRenderer,
   createShapeDebugGeometry,
@@ -24,11 +24,12 @@ import {
   type PhysicsDebugRenderer,
 } from "./box3d-three";
 import { CameraRig } from "./camera-rig";
-import { IsometricCamera } from "./iso-camera";
+import { IsometricCamera, yawFacingMapAngle } from "./iso-camera";
 import { DamagePanel, hitFlashColor, hitFlashStrength } from "./damage-panel";
 import { Aim, describeAim, snapAim } from "./force-aim";
 import { ForceArrow, type ArrowPart } from "./force-arrow";
-import { createMapObject3D } from "./map-object";
+import { LevelPicker } from "./level-picker";
+import { createLevelObjects } from "./map-object";
 import { createTrajectoryPreview } from "./preview";
 import { leaderboardAvailable } from "./api";
 import { LeaderboardPanel } from "./leaderboard-panel";
@@ -48,7 +49,10 @@ const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
 /** How long a body part glows after taking a hit. */
 const HIT_FLASH_SECONDS = 0.4;
-const LEVEL_ID = "level1";
+/** The level to play: ?level=<id> in the URL, or the first one. */
+const LEVEL_IDS = Object.keys(levelSources);
+const requestedLevel = new URLSearchParams(window.location.search).get("level");
+const LEVEL_ID = requestedLevel && requestedLevel in levelSources ? requestedLevel : LEVEL_IDS[0];
 
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box" };
 const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box" };
@@ -72,11 +76,13 @@ export const Game = async ({
   b3: Box3DModule;
   container: HTMLElement;
 }) => {
-  const level = loadLevel(level1Source);
+  const level = loadLevel(levelSources[LEVEL_ID]);
   const { map, inventory } = level;
+  const worldspawn = map.entities.find((e) => e.properties.classname === "worldspawn")?.properties ?? {};
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a1a1a);
+  // A level can set its sky colour with a worldspawn "sky" key, e.g. "#9ecbf2".
+  scene.background = new THREE.Color(worldspawn.sky ?? 0x1a1a1a);
   const camera = new THREE.PerspectiveCamera(
     FIELD_OF_VIEW,
     window.innerWidth / window.innerHeight,
@@ -114,8 +120,9 @@ export const Game = async ({
   hudElement.id = "hud";
   container.appendChild(hudElement);
 
-  const mapObject = createMapObject3D(map);
-  scene.add(mapObject);
+  const levelObjects = createLevelObjects(map);
+  const mapObject = levelObjects.statics;
+  scene.add(mapObject, ...levelObjects.movers);
 
   // Fit the sun's shadow camera around the whole level (with headroom for the
   // ragdoll) so everything in it can cast shadows.
@@ -201,6 +208,13 @@ export const Game = async ({
   container.append(leftColumn, rightColumn);
   const damagePanel = new DamagePanel();
   leftColumn.appendChild(damagePanel.element);
+  if (LEVEL_IDS.length > 1) {
+    const names = LEVEL_IDS.map((id) => {
+      const message = loadLevel(levelSources[id]).map.entities[0]?.properties.message;
+      return { id, name: message ?? id };
+    });
+    rightColumn.appendChild(new LevelPicker(names, LEVEL_ID).element);
+  }
   const leaderboard = leaderboardAvailable ? new LeaderboardPanel(LEVEL_ID) : null;
   if (leaderboard) rightColumn.appendChild(leaderboard.element);
   // The placements the current run started from, for submitting its score.
@@ -243,6 +257,7 @@ export const Game = async ({
     Math.max(0, ...placements.map((p) => (p.kind === "box" ? p.id : 0))) + 1;
 
   const syncVisuals = () => {
+    simulation.movers.forEach((body, i) => syncObjectToBody(b3, body, levelObjects.movers[i]));
     for (const [id, mesh] of propMeshes) syncObjectToBody(b3, simulation.props.get(id)!, mesh);
     simulation.ragdoll.forEach((body, bone) => syncObjectToBody(b3, body, ragdollMeshes[bone]));
     if (physicsDebug?.object3d.visible) physicsDebug.update();
@@ -895,9 +910,17 @@ export const Game = async ({
 
   rebuild();
 
-  // Editing starts in the isometric view, centred on the ragdoll. Rotation
-  // pivots on whatever the view is centred on, found with a physics raycast.
-  iso = new IsometricCamera(renderer.domElement, ragdollMotion().center, (ray) => {
+  // Editing starts in the isometric view, centred on the ragdoll unless the
+  // level says otherwise. Rotation pivots on whatever the view is centred on,
+  // found with a physics raycast.
+  // A level can frame its edit camera with an info_edit_camera point entity:
+  // it looks at the entity's origin, facing its "angle" (a compass angle, like
+  // any entity's), with "view" metres of the level visible top to bottom.
+  const editCamera = map.entities.find((e) => e.properties.classname === "info_edit_camera");
+  const cameraFocus = (editCamera && getEntityWorldOrigin(editCamera)) ?? ragdollMotion().center;
+  const cameraAngle = Number(editCamera?.properties.angle);
+  const cameraView = Number(editCamera?.properties.view);
+  iso = new IsometricCamera(renderer.domElement, cameraFocus, (ray) => {
     const result = b3.b3World_CastRayClosest(
       simulation.world,
       ray.origin.toArray(),
@@ -905,6 +928,9 @@ export const Game = async ({
       queryFilter,
     );
     return result.hit ? new THREE.Vector3(...result.point) : null;
+  }, {
+    yaw: Number.isFinite(cameraAngle) ? yawFacingMapAngle(cameraAngle) : undefined,
+    viewHeight: cameraView > 0 ? cameraView : undefined,
   });
   useEditCamera(true);
 

@@ -3,6 +3,13 @@ import { BODY_PARTS, damageForHit, scoreOf } from "./damage";
 import { createSimulation, type Placement, type RagdollHit, type Simulation } from "./simulation";
 import type { TrenchBroomMap } from "./trenchbroom-map";
 
+/**
+ * Bump whenever anything that affects scores changes (physics, forces, damage,
+ * run limits). The server re-scores stored leaderboard entries under the new
+ * rules, so scores stay comparable. Level edits are picked up separately.
+ */
+export const RULES_VERSION = 2;
+
 export type ScoredHit = RagdollHit & { damage: number };
 
 export type RunLimits = {
