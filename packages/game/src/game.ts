@@ -61,6 +61,8 @@ const LEVEL_IDS = Object.keys(levelSources);
 const requestedLevel = new URLSearchParams(window.location.search).get("level");
 const LEVEL_ID = requestedLevel && requestedLevel in levelSources ? requestedLevel : LEVEL_IDS[0];
 
+/** Screens this narrow get the portrait layout. Keep in step with style.css. */
+const NARROW_SCREEN = "(max-aspect-ratio: 4/5)";
 const TOOL_LABELS: Record<PlacementKind, string> = { force: "Force", box: "Box", mine: "Mine", bait: "Bait" };
 const TOOL_KEYS: Record<string, PlacementKind> = { Digit1: "force", Digit2: "box", Digit3: "mine", Digit4: "bait" };
 
@@ -242,16 +244,32 @@ export const Game = async ({
   rightColumn.id = "right-column";
   container.append(leftColumn, rightColumn);
   const damagePanel = new DamagePanel();
-  leftColumn.appendChild(damagePanel.element);
-  if (LEVEL_IDS.length > 1) {
-    const names = LEVEL_IDS.map((id) => {
-      const message = loadLevel(levelSources[id]).map.entities[0]?.properties.message;
-      return { id, name: message ?? id };
-    });
-    rightColumn.appendChild(new LevelPicker(names, LEVEL_ID).element);
-  }
+  const levelPicker =
+    LEVEL_IDS.length > 1
+      ? new LevelPicker(
+          LEVEL_IDS.map((id) => {
+            const message = loadLevel(levelSources[id]).map.entities[0]?.properties.message;
+            return { id, name: message ?? id };
+          }),
+          LEVEL_ID,
+        )
+      : null;
   const leaderboard = leaderboardAvailable ? new LeaderboardPanel(LEVEL_ID) : null;
-  if (leaderboard) rightColumn.appendChild(leaderboard.element);
+  // Narrow (portrait) screens stack every panel down one side, leaving the
+  // rest of the screen to the game; wider ones split them across both sides.
+  const narrowScreen = window.matchMedia(NARROW_SCREEN);
+  const arrangePanels = () => {
+    const [picker, board] = [levelPicker?.element, leaderboard?.element];
+    if (narrowScreen.matches) {
+      leftColumn.replaceChildren(...[picker, damagePanel.element, board].filter((el) => el !== undefined));
+      rightColumn.replaceChildren();
+    } else {
+      leftColumn.replaceChildren(damagePanel.element);
+      rightColumn.replaceChildren(...[picker, board].filter((el) => el !== undefined));
+    }
+  };
+  arrangePanels();
+  narrowScreen.addEventListener("change", arrangePanels);
   // The placements the current run started from, for submitting its score.
   let runPlacements: Placement[] = [];
 

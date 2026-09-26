@@ -455,3 +455,89 @@ body {
 canvas {
   touch-action: none;
 }
+
+/*
+ * Short screens, e.g. phones held sideways: keep text and buttons big enough
+ * to read and tap.
+ */
+@media (max-height: 500px) {
+  html {
+    font-size: clamp(11px, min(1.25vw, 2.8vh), 48px);
+  }
+}
+
+/*
+ * Narrow (portrait) screens, e.g. phones held upright: size the UI from the
+ * width so it doesn't shrink to nothing, stack every panel down the left (see
+ * NARROW_SCREEN in game.ts), and fit the run timer beside them.
+ */
+@media (max-aspect-ratio: 4/5) {
+  html {
+    font-size: clamp(11px, min(3.4vw, 1.6vh), 22px);
+  }
+
+  #left-column {
+    width: 10.5rem;
+    /* Clear of the hint, which may wrap onto a few lines. */
+    bottom: 10rem;
+  }
+
+  #right-column {
+    display: none;
+  }
+
+  #run-timer {
+    left: 12rem;
+    right: 0.75rem;
+    width: auto;
+    transform: none;
+  }
+
+  #hint {
+    box-sizing: border-box;
+    padding: 0 1rem;
+  }
+}
+
+/*
+ * On small screens of either kind the damage panel shrinks to the total with
+ * the figure beside it; the figure's colours still show where it hurt.
+ */
+@media (max-aspect-ratio: 4/5), (max-height: 500px) {
+  #damage {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    column-gap: 0.5rem;
+  }
+
+  #damage .damage-figure {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    width: 2.5rem;
+    margin: 0;
+  }
+
+  #damage .damage-list {
+    display: none;
+  }
+}
+
+/* Touch screens: no keyboard to show shortcuts for, or to toggle debug info with. */
+@media (hover: none) {
+  #hud .slot-key,
+  #debug {
+    display: none;
+  }
+
+  #hud button.action {
+    padding-top: 0.25rem;
+  }
+}
+
+/* Phones zoom in on text fields with smaller text than this when focused. */
+@media (pointer: coarse) {
+  #leaderboard input {
+    font-size: max(16px, 1em);
+  }
+}
