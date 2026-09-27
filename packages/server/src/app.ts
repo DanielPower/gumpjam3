@@ -7,6 +7,7 @@ import {
   MAX_NAME_LENGTH,
   type ApiError,
   type LeaderboardResponse,
+  type ReplayResponse,
   type SubmitScoreResponse,
 } from "@stairs/shared/api";
 import { simulateRun } from "@stairs/shared/run";
@@ -64,6 +65,16 @@ export function createApp({ b3, levels, scores, corsOrigin = "*", gameDir }: App
   });
 
   // Clients send only their setup; the score comes from re-running it here.
+  // One entry's run, so players can watch it.
+  app.get("/levels/:level/scores/:id", (c) => {
+    const levelId = c.req.param("level");
+    if (!levels.has(levelId)) return c.json<ApiError>({ error: "Unknown level" }, 404);
+    const id = Number(c.req.param("id"));
+    const found = Number.isSafeInteger(id) ? scores.entry(levelId, id) : null;
+    if (!found) return c.json<ApiError>({ error: "No such score" }, 404);
+    return c.json<ReplayResponse>(found);
+  });
+
   app.post("/levels/:level/scores", bodyLimit({ maxSize: MAX_BODY_BYTES }), async (c) => {
     const levelId = c.req.param("level");
     const level = levels.get(levelId);

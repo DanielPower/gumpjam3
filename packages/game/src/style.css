@@ -229,9 +229,8 @@ body {
   pointer-events: none;
 }
 
-/* The damage and leaderboard panels only show during (and after) a run. */
-.editing #damage,
-.editing #leaderboard {
+/* The damage panel only shows during (and after) a run. */
+.editing #damage {
   display: none;
 }
 
@@ -348,7 +347,8 @@ body {
 
 #leaderboard li {
   display: grid;
-  grid-template-columns: 2em 1fr auto;
+  grid-template-columns: 2em 1fr auto auto;
+  align-items: center;
   gap: 0.25rem;
   line-height: 1.6;
   font-variant-numeric: tabular-nums;
@@ -358,6 +358,30 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Watch this entry's run. */
+#leaderboard li button.watch {
+  width: 1.375rem;
+  height: 1.375rem;
+  margin-left: 0.25rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  font-size: 0.625rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#leaderboard li button.watch:hover {
+  background: #4caf50;
+}
+
+#leaderboard li button.watch:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 #leaderboard li.mine {

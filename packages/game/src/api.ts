@@ -1,6 +1,7 @@
 import type {
   ApiError,
   LeaderboardResponse,
+  ReplayResponse,
   SubmitScoreRequest,
   SubmitScoreResponse,
 } from "@stairs/shared/api";
@@ -35,6 +36,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const scoresPath = (level: string) => `/levels/${encodeURIComponent(level)}/scores`;
+
+export const fetchReplay = (level: string, id: number) =>
+  request<ReplayResponse>(`${scoresPath(level)}/${id}`);
 
 export const fetchLeaderboard = (level: string, limit: number) =>
   request<LeaderboardResponse>(`${scoresPath(level)}?limit=${limit}`);

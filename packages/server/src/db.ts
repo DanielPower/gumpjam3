@@ -16,6 +16,8 @@ export type ScoreStore = {
     rules: string;
   }): { id: number; rank: number };
   top(level: string, limit: number): LeaderboardEntry[];
+  /** An entry on `level`, with its placements, or null if there's no such entry. */
+  entry(level: string, id: number): { id: number; name: string; score: number; placements: Placement[] } | null;
   /** Entries on `level` scored under rules other than `rules`. */
   outdated(level: string, rules: string): StoredScore[];
   rescore(id: number, entry: { score: number; damage: number[]; rules: string }): void;
@@ -55,6 +57,7 @@ export function openScoreStore(path: string): ScoreStore {
   const update = db.prepare("UPDATE scores SET score = ?, damage = ?, rules = ? WHERE id = ?");
   const remove = db.prepare("DELETE FROM scores WHERE id = ?");
   // Ties share a rank.
+  const entry = db.prepare("SELECT id, name, score, placements FROM scores WHERE level = ? AND id = ?");
   const rankOf = db.prepare("SELECT COUNT(*) + 1 AS rank FROM scores WHERE level = ? AND score > ?");
   const top = db.prepare(`
     SELECT id, name, score, created_at AS createdAt,
@@ -78,6 +81,10 @@ export function openScoreStore(path: string): ScoreStore {
       return { id: Number(lastInsertRowid), rank };
     },
     top: (level, limit) => top.all(level, limit) as LeaderboardEntry[],
+    entry(level, id) {
+      const row = entry.get(level, id) as { id: number; name: string; score: number; placements: string } | undefined;
+      return row ? { ...row, placements: JSON.parse(row.placements) as Placement[] } : null;
+    },
     outdated: (level, rules) =>
       (outdated.all(level, rules) as { id: number; placements: string }[]).map((row) => ({
         id: row.id,

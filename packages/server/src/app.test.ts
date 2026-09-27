@@ -122,3 +122,19 @@ test("the server serves the game to browsers, alongside the API", async () => {
   assert.equal((await app.request("/nope.js")).status, 404);
   assert.equal((await app.request("/../package.json")).status, 404);
 });
+
+test("an entry's run can be fetched to replay it", async () => {
+  const { app, submit } = setup();
+  const placements = [restingBox];
+  const submitted = await json<SubmitScoreResponse>(await submit({ name: "Replayer", placements }));
+
+  const res = await app.request(`/levels/level1/scores/${submitted.id}`);
+  assert.equal(res.status, 200);
+  const replay = await json<{ id: number; name: string; score: number; placements: unknown }>(res);
+  assert.deepEqual(replay, { id: submitted.id, name: "Replayer", score: submitted.score, placements });
+
+  // Only entries on that level, and only real ones.
+  assert.equal((await app.request(`/levels/level2/scores/${submitted.id}`)).status, 404);
+  assert.equal((await app.request("/levels/level1/scores/999")).status, 404);
+  assert.equal((await app.request("/levels/level1/scores/abc")).status, 404);
+});

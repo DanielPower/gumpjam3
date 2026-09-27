@@ -14,5 +14,8 @@ export type SubmitScoreRequest = { name: string; placements: Placement[]; claime
 
 export type SubmitScoreResponse = { id: number; score: number; rank: number; damage: number[] };
 
+/** GET /levels/:level/scores/:id: an entry's run, to replay it. */
+export type ReplayResponse = { id: number; name: string; score: number; placements: Placement[] };
+
 /** Body of any 4xx response. */
 export type ApiError = { error: string };

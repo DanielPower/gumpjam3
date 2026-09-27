@@ -1,13 +1,14 @@
-import { MAX_NAME_LENGTH, type LeaderboardEntry } from "@stairs/shared/api";
+import { MAX_NAME_LENGTH, type LeaderboardEntry, type ReplayResponse } from "@stairs/shared/api";
 import type { Placement } from "@stairs/shared/simulation";
-import { fetchLeaderboard, submitScore } from "./api";
+import { fetchLeaderboard, fetchReplay, submitScore } from "./api";
 
 const LEADERBOARD_SIZE = 10;
 const NAME_STORAGE_KEY = "stairs.playerName";
 
 /**
- * The level's top scores, and a form to submit a finished run. Only the run's
- * placements are sent; the server replays them to work out the score.
+ * The level's top scores, each with a button to watch that run, and a form to
+ * submit a finished run. Only the run's placements are sent; the server replays
+ * them to work out the score.
  */
 export class LeaderboardPanel {
   readonly element = document.createElement("div");
@@ -20,9 +21,12 @@ export class LeaderboardPanel {
   /** The finished run on offer for submission. */
   private pending: { placements: Placement[]; score: number } | null = null;
   private highlightId: number | null = null;
+  private readonly onReplay: (replay: ReplayResponse) => void;
 
-  constructor(levelId: string) {
+  /** `onReplay` is given a leaderboard entry's run when its play button is pressed. */
+  constructor(levelId: string, onReplay: (replay: ReplayResponse) => void) {
     this.levelId = levelId;
+    this.onReplay = onReplay;
     this.element.id = "leaderboard";
 
     const title = document.createElement("div");
@@ -117,10 +121,30 @@ export class LeaderboardPanel {
         name.textContent = entry.name;
         const score = document.createElement("span");
         score.textContent = entry.score.toLocaleString();
-        row.append(rank, name, score);
+        const watch = document.createElement("button");
+        watch.type = "button";
+        watch.className = "watch";
+        watch.textContent = "▶";
+        watch.title = `Watch ${entry.name}'s run`;
+        watch.setAttribute("aria-label", watch.title);
+        watch.addEventListener("click", () => void this.watch(entry, watch));
+        row.append(rank, name, score, watch);
         return row;
       }),
     );
+  }
+
+  /** Fetch an entry's run and hand it over to be replayed. */
+  private async watch(entry: LeaderboardEntry, button: HTMLButtonElement) {
+    button.disabled = true;
+    try {
+      this.onReplay(await fetchReplay(this.levelId, entry.id));
+    } catch (error) {
+      this.setStatus((error as Error).message, true);
+    } finally {
+      button.disabled = false;
+      button.blur();
+    }
   }
 
   private message(text: string) {

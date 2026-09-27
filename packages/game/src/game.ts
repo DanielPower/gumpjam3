@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { type Box3DModule, type b3Vec3 } from "box3d.js";
 import { BODY_PARTS, scoreOf } from "@stairs/shared/damage";
 import { loadLevel } from "@stairs/shared/level";
+import type { ReplayResponse } from "@stairs/shared/api";
 import { startRun, type Run, type ScoredHit } from "@stairs/shared/run";
 import {
   BAIT_SURFACE_OFFSET,
@@ -305,14 +306,20 @@ export const Game = ({
           onSelectLevel,
         )
       : null;
-  const leaderboard = leaderboardAvailable ? new LeaderboardPanel(levelId) : null;
-  // The damage and leaderboard panels are for runs: they appear with one, and
-  // stay until it's reset so its score can be submitted.
+  const leaderboard = leaderboardAvailable ? new LeaderboardPanel(levelId, (replay) => watchReplay(replay)) : null;
+  /**
+   * A leaderboard run being replayed, and the player's own setup, which is set
+   * aside meanwhile and comes back when it ends.
+   */
+  let replaying: { name: string; ownPlacements: Placement[] } | null = null;
+  // The damage panel is for runs: it appears with one, and stays until it's
+  // reset. The leaderboard is always there, so any entry's run can be watched.
   panels.append(...[levelPicker?.element, damagePanel.element, leaderboard?.element].filter((el) => el !== undefined));
   // The placements the current run started from, for submitting its score.
   let runPlacements: Placement[] = [];
 
-  const runTitle = (r: Run) => (r.finished ? "Final score" : "Damage");
+  const runTitle = (r: Run) =>
+    replaying ? (r.finished ? `${replaying.name}'s score` : `${replaying.name}'s run`) : r.finished ? "Final score" : "Damage";
   const runTimer = new RunTimer();
   root.appendChild(runTimer.element);
 
@@ -334,7 +341,8 @@ export const Game = ({
       damagePanel.flash(bone);
     }
     damagePanel.update(r.damage, runTitle(r));
-    if (r.finished) leaderboard?.offerSubmission(runPlacements, scoreOf(r.damage));
+    // Someone else's run is only for watching.
+    if (r.finished && !replaying) leaderboard?.offerSubmission(runPlacements, scoreOf(r.damage));
   };
 
   const updateFlashes = (dt: number) => {
@@ -734,7 +742,24 @@ export const Game = ({
 
   const reset = () => {
     stopRunning();
+    if (replaying) {
+      placements = replaying.ownPlacements;
+      replaying = null;
+    }
     rebuild();
+  };
+
+  /** Play a leaderboard entry's run, putting the player's own setup aside until it's over. */
+  const watchReplay = (replay: ReplayResponse) => {
+    const ownPlacements = replaying?.ownPlacements ?? placements;
+    stopRunning();
+    cancelDrag();
+    tool = null;
+    selected = null;
+    replaying = { name: replay.name, ownPlacements };
+    placements = replay.placements;
+    rebuild();
+    play();
   };
 
   // --- Force arrows -------------------------------------------------------------
@@ -859,7 +884,9 @@ export const Game = ({
     } else if (!running && placements.length) {
       actions.push(action("Clear", "C", clear));
     }
-    actions.push(running ? action("Reset", "Space", reset, "reset") : action("Go!", "Space", play, "go"));
+    actions.push(
+      running ? action(replaying ? "Back" : "Reset", "Space", reset, "reset") : action("Go!", "Space", play, "go"),
+    );
     const divider = document.createElement("div");
     divider.className = "divider";
     hudElement.classList.toggle("running", running);
@@ -870,6 +897,7 @@ export const Game = ({
   const hint = () => {
     const touch = pointerType !== "mouse";
     const tap = touch ? "Tap" : "Click";
+    if (running && replaying) return `Watching ${replaying.name}'s run · go back to your own setup when you're done`;
     if (running && run?.finished) return "Run over · reset to try again";
     if (running) return touch ? "Drag to orbit · pinch to zoom" : "Drag to orbit · scroll to zoom";
     if (drag?.kind === "aim") {
