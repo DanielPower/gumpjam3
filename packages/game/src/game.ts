@@ -67,6 +67,8 @@ const LOOK_AHEAD_SECONDS = 0.15;
 const MAX_LOOK_AHEAD = 1;
 /** How long a body part glows after taking a hit. */
 const HIT_FLASH_SECONDS = 0.4;
+const SANDBOX_STORAGE_KEY = "stairs.sandbox";
+const PHYSICS_PREVIEW_STORAGE_KEY = "stairs.physicsPreview";
 const LEVEL_IDS = Object.keys(levelSources);
 
 const TOOL_LABELS: Record<PlacementKind, string> = {
@@ -190,6 +192,7 @@ export const Game = ({
 
   const debugElement = document.createElement("div");
   debugElement.id = "debug";
+  debugElement.hidden = true;
   root.appendChild(debugElement);
 
   const hudElement = document.createElement("div");
@@ -235,8 +238,13 @@ export const Game = ({
   let placements: Placement[] = [];
   let selected: number | null = null;
   let running = false;
+  let sandbox = localStorage.getItem(SANDBOX_STORAGE_KEY) === "1";
+  /** Sandbox is captured at Go, so a completed sandbox run cannot become eligible later. */
+  let runSandbox = false;
   let tool: PlacementKind | null = null;
-  let debugVisible = false;
+  let showFps = false;
+  let physicsDebugVisible = false;
+  let physicsPreviewEnabled = localStorage.getItem(PHYSICS_PREVIEW_STORAGE_KEY) !== "0";
   let previewDirty = true;
 
   let simulation: Simulation;
@@ -304,9 +312,36 @@ export const Game = ({
           }),
           levelId,
           onSelectLevel,
+          [
+            {
+              label: "Sandbox mode",
+              description: "Unlimited items; leaderboard scores are disabled",
+              checked: () => sandbox,
+              setChecked: (enabled) => setSandbox(enabled),
+            },
+            {
+              label: "FPS counter",
+              description: "Show frame rate in the bottom-left corner",
+              checked: () => showFps,
+              setChecked: (enabled) => setFpsVisible(enabled),
+            },
+            {
+              label: "Physics debug",
+              description: "Show collision shapes and physics bodies",
+              checked: () => physicsDebugVisible,
+              setChecked: (enabled) => setPhysicsDebugVisible(enabled),
+            },
+            {
+              label: "Physics preview",
+              description: "Simulate two seconds ahead and show the predicted path",
+              checked: () => physicsPreviewEnabled,
+              setChecked: (enabled) => setPhysicsPreviewEnabled(enabled),
+            },
+          ],
         )
       : null;
   const leaderboard = leaderboardAvailable ? new LeaderboardPanel(levelId, (replay) => watchReplay(replay)) : null;
+  leaderboard?.setSandbox(sandbox);
   /**
    * A leaderboard run being replayed, and the player's own setup, which is set
    * aside meanwhile and comes back when it ends.
@@ -342,7 +377,7 @@ export const Game = ({
     }
     damagePanel.update(r.damage, runTitle(r));
     // Someone else's run is only for watching.
-    if (r.finished && !replaying) leaderboard?.offerSubmission(runPlacements, scoreOf(r.damage));
+    if (r.finished && !replaying && !runSandbox) leaderboard?.offerSubmission(runPlacements, scoreOf(r.damage));
   };
 
   const updateFlashes = (dt: number) => {
@@ -356,7 +391,7 @@ export const Game = ({
   };
 
   const remaining = (kind: PlacementKind) =>
-    inventory[kind] - placements.filter((p) => p.kind === kind).length;
+    sandbox ? Infinity : inventory[kind] - placements.filter((p) => p.kind === kind).length;
 
   const nextMineId = () =>
     Math.max(0, ...placements.map((p) => (p.kind === "mine" ? p.id : 0))) + 1;
@@ -544,7 +579,7 @@ export const Game = ({
 
     if (physicsDebug) disposeObject(physicsDebug.object3d);
     physicsDebug = createPhysicsDebugRenderer(b3, simulation.world);
-    physicsDebug.object3d.visible = debugVisible;
+    physicsDebug.object3d.visible = physicsDebugVisible;
     scene.add(physicsDebug.object3d);
 
     if (!ragdollMeshes.length) {
@@ -687,6 +722,36 @@ export const Game = ({
     updateHud();
   };
 
+  const setSandbox = (enabled: boolean) => {
+    if (running || replaying) return sandbox;
+    sandbox = enabled;
+    localStorage.setItem(SANDBOX_STORAGE_KEY, sandbox ? "1" : "0");
+    leaderboard?.setSandbox(sandbox);
+    updateHud();
+    return sandbox;
+  };
+
+  const setFpsVisible = (enabled: boolean) => {
+    showFps = enabled;
+    debugElement.hidden = !showFps;
+    return showFps;
+  };
+
+  const setPhysicsDebugVisible = (enabled: boolean) => {
+    physicsDebugVisible = enabled;
+    physicsDebug!.object3d.visible = physicsDebugVisible;
+    if (physicsDebugVisible) physicsDebug!.update();
+    return physicsDebugVisible;
+  };
+
+  const setPhysicsPreviewEnabled = (enabled: boolean) => {
+    physicsPreviewEnabled = enabled;
+    localStorage.setItem(PHYSICS_PREVIEW_STORAGE_KEY, physicsPreviewEnabled ? "1" : "0");
+    if (physicsPreviewEnabled) previewDirty = true;
+    trajectory.object3d.visible = physicsPreviewEnabled && !running;
+    return physicsPreviewEnabled;
+  };
+
   const useEditCamera = (editing: boolean) => {
     iso.enabled = editing;
     rig.controls.enabled = !editing;
@@ -727,6 +792,7 @@ export const Game = ({
     );
     useEditCamera(false);
     running = true;
+    runSandbox = sandbox;
     tool = null;
     selected = null;
     runPlacements = placements;
@@ -854,8 +920,8 @@ export const Game = ({
     const left = remaining(kind);
     const el = document.createElement("button");
     el.className = "slot";
-    el.title = `${TOOL_LABELS[kind]} (${key})`;
-    el.setAttribute("aria-label", `${TOOL_LABELS[kind]}, ${left} left`);
+    el.title = `${TOOL_LABELS[kind]} (${key})${sandbox ? " — unlimited in sandbox" : ""}`;
+    el.setAttribute("aria-label", `${TOOL_LABELS[kind]}, ${sandbox ? "unlimited" : `${left} left`}`);
     el.classList.toggle("active", tool === kind);
     el.classList.toggle("empty", left <= 0);
     el.disabled = running || left <= 0;
@@ -864,7 +930,7 @@ export const Game = ({
     keyLabel.textContent = String(key);
     const count = document.createElement("span");
     count.className = "slot-count";
-    count.textContent = String(left);
+    count.textContent = sandbox ? "∞" : String(left);
     el.append(inventoryIcon(kind), keyLabel, count);
     el.addEventListener("click", () => selectTool(kind));
     return el;
@@ -876,7 +942,7 @@ export const Game = ({
    * it stays narrow.
    */
   function updateHud() {
-    const offered = (Object.keys(TOOL_LABELS) as PlacementKind[]).filter((kind) => inventory[kind] > 0);
+    const offered = (Object.keys(TOOL_LABELS) as PlacementKind[]).filter((kind) => sandbox || inventory[kind] > 0);
     const actions: HTMLButtonElement[] = [];
     if (!running && selected !== null) {
       const index = selected;
@@ -898,8 +964,10 @@ export const Game = ({
     const touch = pointerType !== "mouse";
     const tap = touch ? "Tap" : "Click";
     if (running && replaying) return `Watching ${replaying.name}'s run · go back to your own setup when you're done`;
-    if (running && run?.finished) return "Run over · reset to try again";
-    if (running) return touch ? "Drag to orbit · pinch to zoom" : "Drag to orbit · scroll to zoom";
+    if (running && run?.finished) return runSandbox ? "Sandbox run over · reset to try again · scores cannot be submitted" : "Run over · reset to try again";
+    if (running) return runSandbox
+      ? "Sandbox run · scores cannot be submitted"
+      : touch ? "Drag to orbit · pinch to zoom" : "Drag to orbit · scroll to zoom";
     if (drag?.kind === "aim") {
       const hints: Record<AimMode, string> = {
         create: "Drag to aim, further out for more strength",
@@ -1529,11 +1597,6 @@ export const Game = ({
       case "BracketRight":
         if (!running && !drag) adjustStrength(event.code === "BracketRight" ? STRENGTH_STEP : 1 / STRENGTH_STEP);
         break;
-      case "KeyP":
-        debugVisible = !debugVisible;
-        physicsDebug!.object3d.visible = debugVisible;
-        if (debugVisible) physicsDebug!.update();
-        break;
       default:
         if (event.code in TOOL_KEYS) selectTool(TOOL_KEYS[event.code]);
     }
@@ -1593,10 +1656,7 @@ export const Game = ({
   root.appendChild(hintElement);
 
   const debugInfo = ({ dt }: { dt: number }) =>
-    [
-      `FPS: ${Math.round(1000 / dt)}`,
-      `Physics debug: ${debugVisible ? "on" : "off"} (P)`,
-    ].join(" | ");
+    `FPS: ${Math.round(1000 / dt)}`;
 
   let lastTime = 0;
   const animate = (time: number) => {
@@ -1626,11 +1686,11 @@ export const Game = ({
     if (running) {
       const { center, velocity } = ragdollMotion();
       rig.follow(center.add(velocity.multiplyScalar(LOOK_AHEAD_SECONDS).clampLength(0, MAX_LOOK_AHEAD)));
-    } else if (previewDirty) {
+    } else if (physicsPreviewEnabled && previewDirty) {
       trajectory.update(draft());
       previewDirty = false;
     }
-    trajectory.object3d.visible = !running;
+    trajectory.object3d.visible = physicsPreviewEnabled && !running;
     runTimer.update(running ? run : null);
     // Keep arrow handles a constant size on screen, facing the edit camera as it zooms and turns.
     if (!running) for (const arrow of arrows) arrow.setView(iso.metresPerPixel, iso.camera);
@@ -1642,7 +1702,7 @@ export const Game = ({
     updateRopes();
     updateThrusters(time / 1000);
     renderer.render(scene, activeCamera);
-    debugElement.innerText = debugInfo({ dt });
+    if (showFps) debugElement.innerText = debugInfo({ dt });
     const hintText = hint();
     if (hintElement.textContent !== hintText) hintElement.textContent = hintText;
   };

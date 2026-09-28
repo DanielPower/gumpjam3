@@ -458,6 +458,12 @@ body {
   color: #999;
 }
 
+#level-picker .level-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 #level-picker .level-picker-row {
   display: flex;
   align-items: center;
@@ -487,6 +493,64 @@ body {
 #level-picker button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+#level-picker button.settings-button {
+  width: 1.75rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #bbb;
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+#level-picker button.settings-button:hover,
+#level-picker button.settings-button[aria-expanded="true"] {
+  background: #3a3a3a;
+  color: white;
+}
+
+#level-picker .settings-menu {
+  display: grid;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #444;
+}
+
+#level-picker .settings-menu[hidden] {
+  display: none;
+}
+
+#level-picker .settings-menu label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem;
+  align-items: start;
+  cursor: pointer;
+}
+
+#level-picker .settings-menu input {
+  margin: 0.1875rem 0 0;
+  accent-color: #c9a227;
+}
+
+#level-picker .settings-menu strong,
+#level-picker .settings-menu small {
+  display: block;
+}
+
+#level-picker .settings-menu strong {
+  color: white;
+  font-size: 0.8125rem;
+}
+
+#level-picker .settings-menu small {
+  margin-top: 0.0625rem;
+  color: #aaa;
+  line-height: 1.25;
 }
 
 /* The game handles every touch gesture itself (pinch, pan, drags). */

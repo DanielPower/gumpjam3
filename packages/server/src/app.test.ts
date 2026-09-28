@@ -81,6 +81,12 @@ describe("POST /levels/:level/scores", () => {
     const res = await setup().submit({ name: "x", placements: [push] }, "nope");
     assert.equal(res.status, 404);
   });
+
+  test("rejects sandbox runs", async () => {
+    const res = await setup().submit({ name: "x", placements: [push], sandbox: true });
+    assert.equal(res.status, 403);
+    assert.match((await json<ApiError>(res)).error, /Sandbox runs cannot be submitted/);
+  });
 });
 
 describe("GET /levels/:level/scores", () => {

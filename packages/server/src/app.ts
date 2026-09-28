@@ -82,7 +82,9 @@ export function createApp({ b3, levels, scores, corsOrigin = "*", gameDir }: App
 
     const body: unknown = await c.req.json().catch(() => null);
     if (typeof body !== "object" || body === null) return c.json<ApiError>({ error: "Expected a JSON object" }, 400);
-    const { name: rawName, placements: rawPlacements, claimedScore } = body as Record<string, unknown>;
+    const { name: rawName, placements: rawPlacements, claimedScore, sandbox } = body as Record<string, unknown>;
+
+    if (sandbox === true) return c.json<ApiError>({ error: "Sandbox runs cannot be submitted" }, 403);
 
     const name = cleanName(rawName);
     if (!name) return c.json<ApiError>({ error: `name must be 1-${MAX_NAME_LENGTH} characters` }, 400);

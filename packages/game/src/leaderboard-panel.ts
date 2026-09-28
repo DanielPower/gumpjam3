@@ -21,6 +21,7 @@ export class LeaderboardPanel {
   /** The finished run on offer for submission. */
   private pending: { placements: Placement[]; score: number } | null = null;
   private highlightId: number | null = null;
+  private sandbox = false;
   private readonly onReplay: (replay: ReplayResponse) => void;
 
   /** `onReplay` is given a leaderboard entry's run when its play button is pressed. */
@@ -63,6 +64,7 @@ export class LeaderboardPanel {
 
   /** Offer to submit a run that just finished. */
   offerSubmission(placements: readonly Placement[], score: number) {
+    if (this.sandbox) return;
     this.pending = { placements: structuredClone([...placements]), score };
     this.form.hidden = false;
     this.submitButton.disabled = false;
@@ -74,7 +76,13 @@ export class LeaderboardPanel {
   withdraw() {
     this.pending = null;
     this.form.hidden = true;
-    this.setStatus("");
+    this.setStatus(this.sandbox ? "Sandbox mode: leaderboard submissions are disabled." : "");
+  }
+
+  /** Sandbox runs may be watched, but never submitted. */
+  setSandbox(enabled: boolean) {
+    this.sandbox = enabled;
+    this.withdraw();
   }
 
   private async submit() {

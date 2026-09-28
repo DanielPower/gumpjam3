@@ -10,7 +10,13 @@ export type LeaderboardEntry = { id: number; rank: number; name: string; score: 
 export type LeaderboardResponse = { scores: LeaderboardEntry[] };
 
 /** POST /levels/:level/scores. The server re-runs `placements` to get the score. */
-export type SubmitScoreRequest = { name: string; placements: Placement[]; claimedScore?: number };
+export type SubmitScoreRequest = {
+  name: string;
+  placements: Placement[];
+  claimedScore?: number;
+  /** Sandbox runs have unlimited inventory and can never enter the leaderboard. */
+  sandbox?: boolean;
+};
 
 export type SubmitScoreResponse = { id: number; score: number; rank: number; damage: number[] };
 
